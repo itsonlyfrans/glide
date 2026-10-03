@@ -626,6 +626,16 @@ impl Core {
 
     /// Read this computer's model once, in the background; when it is known, tell the connected computers.
     pub(super) async fn learn_own_model(&mut self) {
+        if !self.model_started && self.native_manager.is_some() && self.mock_platform.is_some() {
+            // Simulated computers (tests) describe themselves without asking the system: on macOS that runs
+            // system_profiler, which is far too heavy to start for every test engine.
+            self.model_started = true;
+            *self.model_found.lock().unwrap_or_else(|e| e.into_inner()) = Some(DeviceModel {
+                name: "Simulated computer".into(),
+                kind: "desktop".into(),
+                builtin_monitor: None,
+            });
+        }
         if !self.model_started && self.native_manager.is_some() {
             self.model_started = true;
             let slot = self.model_found.clone();
@@ -1590,7 +1600,10 @@ impl Core {
                             existing.model = model;
                             existing.last_monitors = last_monitors;
                             // Just connected over the real network: note its network card address for waking it later.
-                            if connected && self.native_manager.is_some() {
+                            if connected
+                                && self.native_manager.is_some()
+                                && self.mock_platform.is_none()
+                            {
                                 if let Some(ip) = crate::wake::peer_ip(existing) {
                                     let found = self.wake_found.clone();
                                     let device_id = existing.device_id.clone();
