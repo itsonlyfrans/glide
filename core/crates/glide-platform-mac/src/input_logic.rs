@@ -380,8 +380,9 @@ pub(crate) struct MovePacer {
 
 /// Moves that keep arriving at least this often need no smoothing (seconds).
 const STEADY_GAP: f64 = 0.006;
-/// Never glide for longer than this, so the cursor can not feel heavy (seconds).
-const MAX_GLIDE: f64 = 0.016;
+/// Never glide for longer than this, so the cursor can not feel heavy (seconds). One 120 Hz frame: a busy Mac sees
+/// bigger bursts, and a longer glide there made the cursor feel delayed.
+const MAX_GLIDE: f64 = 0.008;
 /// After a pause this long, the next move is a fresh start and is posted at once (seconds).
 const IDLE_GAP: f64 = 0.12;
 
@@ -419,7 +420,7 @@ impl MovePacer {
         }
         self.from = shown;
         self.started = Some(now);
-        self.length = (self.burst_gap * 0.75).min(MAX_GLIDE);
+        self.length = (self.burst_gap * 0.5).min(MAX_GLIDE);
         None
     }
 
@@ -704,8 +705,8 @@ mod tests {
             }
         }
         assert!(
-            eased.len() >= 10,
-            "the cursor moves on many frames between bursts: {eased:?}"
+            eased.len() >= 8,
+            "the cursor moves on several frames between bursts: {eased:?}"
         );
         assert!(
             eased.windows(2).all(|w| w[1] >= w[0]),
@@ -741,6 +742,16 @@ mod tests {
             last,
             Some(Point { x: 200.0, y: 0.0 }),
             "arrived within 50 ms"
+        );
+        // Never more than one 120 Hz frame behind: a busy Mac must not make the cursor feel delayed.
+        let mut pacer = MovePacer::new();
+        pacer.arrive(Point { x: 0.0, y: 0.0 }, at(0.0));
+        pacer.arrive(Point { x: 1.0, y: 0.0 }, at(60.0));
+        assert!(pacer.arrive(Point { x: 300.0, y: 0.0 }, at(61.0)).is_none());
+        assert_eq!(
+            pacer.tick(at(61.0 + 8.5)),
+            Some(Point { x: 300.0, y: 0.0 }),
+            "caught up after 8 ms"
         );
     }
 }

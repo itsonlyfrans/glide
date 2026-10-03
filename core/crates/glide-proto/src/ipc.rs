@@ -324,6 +324,9 @@ pub struct SwitchingSettings {
     /// Makes quick mouse movement travel further than slow movement while controlling another computer, like a Mac
     /// trackpad does (0.0 = off). Only used where the mouse reports raw, unaccelerated movement (Windows).
     pub pointer_acceleration: f64,
+    /// When the cursor arrives from another computer in bursts (often on Wi-Fi), spread each burst over the next few
+    /// display frames instead of jumping (macOS). Adds at most 8 ms.
+    pub smooth_moves: bool,
 }
 
 impl Default for SwitchingSettings {
@@ -334,6 +337,7 @@ impl Default for SwitchingSettings {
             double_tap: false,
             pointer_speed: 1.0,
             pointer_acceleration: 0.0,
+            smooth_moves: true,
         }
     }
 }

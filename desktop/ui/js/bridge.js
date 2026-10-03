@@ -19,6 +19,8 @@
     openExternal: (url) => invoke('glide_open_external', { url: String(url) }),
     checkForUpdates: () => invoke('glide_check_update'),
     installUpdate: () => invoke('glide_install_update'),
+    getPrefs: () => invoke('glide_get_prefs'),
+    setPrefs: (prefs) => invoke('glide_set_prefs', { prefs }),
     onEvent: (handler) => {
       let stop = null;
       let stopped = false;

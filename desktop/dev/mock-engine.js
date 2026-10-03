@@ -54,7 +54,7 @@ const state = {
     device_name: 'Studio PC',
     hotkeys: { return_home: 'Ctrl+Alt+Shift+Home', toggle_sharing: 'Ctrl+Alt+Shift+S' },
     clipboard: { enabled: true, sync_text: true, sync_images: true, sync_files: true, max_auto_mb: 2048, exclude_sensitive: true },
-    switching: { edge_delay_ms: 0, corner_dead_zone_px: 4, double_tap: false, pointer_speed: 1, pointer_acceleration: 0 },
+    switching: { edge_delay_ms: 0, corner_dead_zone_px: 4, double_tap: false, pointer_speed: 1, pointer_acceleration: 0, smooth_moves: true },
     keyboard: { swap_ctrl_cmd: 'auto' },
     startup: { launch_at_login: false, start_minimized: false },
     network: { port: 24800, discovery: true },

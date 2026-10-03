@@ -168,6 +168,8 @@ impl Drop for Wake {
 struct MoveSlot {
     latest: Mutex<Option<InputEvent>>,
     queued: AtomicBool,
+    /// Smooth bursts of moves (Settings: "Smooth cursor over Wi-Fi").
+    smooth: AtomicBool,
 }
 
 extern "C" {
@@ -258,6 +260,7 @@ impl MacInput {
         let moves = Arc::new(MoveSlot {
             latest: Mutex::new(None),
             queued: AtomicBool::new(false),
+            smooth: AtomicBool::new(true),
         });
         let moves_thread = moves.clone();
         let thread = thread::Builder::new()
@@ -360,6 +363,10 @@ impl MacInput {
 }
 
 impl InputBackend for MacInput {
+    fn set_move_smoothing(&self, on: bool) {
+        self.moves.smooth.store(on, Ordering::Release);
+    }
+
     fn request_permissions(&self) -> Permissions {
         MacInput::request_permissions(self)
     }
@@ -786,6 +793,12 @@ impl Context {
             return;
         };
         if let InputEventKind::PointerMoved { position, .. } = event.kind {
+            if !self.moves.smooth.load(Ordering::Acquire) {
+                self.pacer.reset();
+                self.run_frames(false);
+                let _ = self.inject(event.kind);
+                return;
+            }
             match self.pacer.arrive(position, Instant::now()) {
                 Some(now) => {
                     let _ = self.inject(InputEventKind::PointerMoved {

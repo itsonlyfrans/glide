@@ -1363,6 +1363,9 @@ fn build_engine(
     if state.self_info.os == glide_platform::Os::Windows {
         engine.set_forward_acceleration(state.settings.switching.pointer_acceleration);
     }
+    platform
+        .input_backend()
+        .set_move_smoothing(state.settings.switching.smooth_moves);
     Ok(engine)
 }
 

@@ -337,6 +337,9 @@ pub enum CaptureMode {
 /// call means the requested operation is applied; an error must not hide a pending operation.
 /// Dropping the backend removes its hooks and restores local capture.
 pub trait InputBackend: Send + Sync {
+    /// Smooth remote cursor moves that arrive in bursts (macOS only; elsewhere moves are always posted at once).
+    fn set_move_smoothing(&self, _on: bool) {}
+
     /// Authoritative Secure Input state where supported; independent of permissions.
     fn secure_input_enabled(&self) -> Option<bool> {
         None

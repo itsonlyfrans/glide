@@ -61,6 +61,27 @@ function segmented(options, current, onPick) {
   return seg;
 }
 
+// macOS: show Glide in the Dock, the menu bar, both or neither. Kept by the window, applied at once.
+const PRESENCE = [['both', 'Dock and menu bar'], ['menubar', 'Menu bar'], ['dock', 'Dock'], ['hidden', 'Neither']];
+let presence = null;
+function presenceRow() {
+  const box = h('div');
+  const help = (v) => (v === 'hidden'
+    ? 'Glide keeps running quietly. To see this window again, open Glide from Applications or Spotlight.'
+    : v === 'dock' ? 'Closing the window keeps Glide running; click it in the Dock to come back.'
+      : 'Closing the window keeps Glide running; use the Glide icon in the menu bar to come back.');
+  const draw = () => {
+    const desc = h('div', { class: 'desc' }, help(presence ?? 'both'));
+    clear(box).append(setting('Show Glide in', null, segmented(PRESENCE, presence ?? 'both', async (v) => {
+      try { await window.glide.setPrefs({ mac_presence: v }); presence = v; desc.textContent = help(v); } catch (e) { toast(String(e), 'error'); }
+    })));
+    box.firstChild.querySelector('.grow').append(desc);
+  };
+  draw();
+  if (presence == null) window.glide.getPrefs().then((p) => { presence = p?.mac_presence ?? 'both'; draw(); }).catch(() => {});
+  return box;
+}
+
 const setting = (title, desc, control) => h('div', { class: 'setting' }, h('div', { class: 'grow' }, h('div', { class: 'title' }, title), desc ? h('div', { class: 'desc' }, desc) : null), control);
 
 export function mountSettings(root) {
@@ -79,7 +100,8 @@ export function mountSettings(root) {
             return i;
           })()),
           switchRow({ title: 'Open Glide when I sign in', desc: 'Starts quietly in the background so sharing is ready.', checked: s.startup.launch_at_login, onChange: (v) => patch({ startup: { launch_at_login: v } }) }),
-          switchRow({ title: 'Start minimized', desc: 'Skip the window and go straight to the tray.', checked: s.startup.start_minimized, onChange: (v) => patch({ startup: { start_minimized: v } }) }))),
+          switchRow({ title: 'Start minimized', desc: document.body.classList.contains('plat-mac') ? 'Skip the window and start quietly in the background.' : 'Skip the window and go straight to the tray.', checked: s.startup.start_minimized, onChange: (v) => patch({ startup: { start_minimized: v } }) }),
+          document.body.classList.contains('plat-mac') && window.glide?.getPrefs ? presenceRow() : null)),
 
       h('section', { class: 'section' },
         h('h2', null, 'Moving between screens'),
@@ -108,6 +130,7 @@ export function mountSettings(root) {
             r.addEventListener('change', () => patch({ switching: { pointer_acceleration: r.value / 10 } }));
             return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, r, out);
           })()) : null,
+          state.self.os === 'macos' ? switchRow({ title: 'Smooth the cursor over Wi-Fi', desc: 'When the cursor arrives from another computer in bursts, spread them over the next frames instead of jumping. Adds at most 8 ms. Turn it off if the cursor feels delayed.', checked: s.switching.smooth_moves !== false, onChange: (v) => patch({ switching: { smooth_moves: v } }) }) : null,
           switchRow({ title: 'Double-tap the edge to cross', desc: 'Cross only when you push against the edge twice.', checked: s.switching.double_tap, onChange: (v) => patch({ switching: { double_tap: v } }) }),
           setting('Return to this computer', 'Works from anywhere, even if a connection drops.', hotkeyButton(s.hotkeys.return_home, (v) => patch({ hotkeys: { return_home: v } }))),
           setting('Turn sharing on or off', null, hotkeyButton(s.hotkeys.toggle_sharing, (v) => patch({ hotkeys: { toggle_sharing: v } }))))),

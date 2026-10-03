@@ -1,6 +1,6 @@
 [package]
 name = "glide-desktop"
-version = "0.2.4"
+version = "0.2.5"
 description = "The Glide window: pairs computers, arranges screens and controls the always-on Glide engine."
 edition = "2021"
 publish = false

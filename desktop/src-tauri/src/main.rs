@@ -85,6 +85,35 @@ fn create_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+// ------------------------------------------------------------------------------------------------ where Glide shows (macOS)
+
+/// Where Glide shows itself on a Mac: in the Dock and the menu bar, only one of them, or neither.
+const PRESENCES: [&str; 4] = ["both", "menubar", "dock", "hidden"];
+
+fn prefs_path(data_root: &std::path::Path) -> PathBuf {
+    data_root.join("window-prefs.json")
+}
+
+fn load_presence(data_root: &std::path::Path) -> String {
+    std::fs::read_to_string(prefs_path(data_root))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|v| v.get("mac_presence").and_then(Value::as_str).map(str::to_owned))
+        .filter(|p| PRESENCES.contains(&p.as_str()))
+        .unwrap_or_else(|| "both".to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_presence(app: &AppHandle, presence: &str) {
+    let _ = app.set_dock_visibility(matches!(presence, "both" | "dock"));
+    if let Some(tray) = app.tray_by_id("glide") {
+        let _ = tray.set_visible(matches!(presence, "both" | "menubar"));
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_presence(_app: &AppHandle, _presence: &str) {}
+
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -322,6 +351,33 @@ async fn glide_start_engine(state: State<'_, Shared>) -> Result<(), ()> {
 }
 
 #[tauri::command]
+fn glide_get_prefs(state: State<'_, Shared>) -> Value {
+    json!({ "mac_presence": load_presence(&state.data_root) })
+}
+
+#[tauri::command]
+fn glide_set_prefs(app: AppHandle, state: State<'_, Shared>, prefs: Value) -> Result<Value, String> {
+    let presence = prefs
+        .get("mac_presence")
+        .and_then(Value::as_str)
+        .filter(|p| PRESENCES.contains(p))
+        .ok_or("Unknown choice.")?;
+    let text = serde_json::to_string_pretty(&json!({ "mac_presence": presence })).map_err(|e| e.to_string())?;
+    let _ = std::fs::create_dir_all(&state.data_root);
+    std::fs::write(prefs_path(&state.data_root), text).map_err(|_| "Could not save the setting.".to_string())?;
+    let was_visible = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    apply_presence(&app, presence);
+    // Leaving the Dock can hide the app's windows; keep this one where the person is looking.
+    if was_visible {
+        show_window(&app);
+    }
+    Ok(json!({ "mac_presence": presence }))
+}
+
+#[tauri::command]
 fn glide_open_logs(app: AppHandle) {
     open_logs(&app);
 }
@@ -498,6 +554,7 @@ fn main() {
 
             #[cfg(target_os = "macos")]
             tray::create(&handle)?;
+            apply_presence(&handle, &load_presence(&app.state::<Shared>().data_root));
 
             let started = handle.clone();
             tauri::async_runtime::spawn(async move {
@@ -527,6 +584,8 @@ fn main() {
             glide_reset_permissions,
             glide_check_update,
             glide_install_update,
+            glide_get_prefs,
+            glide_set_prefs,
         ])
         .build(tauri::generate_context!())
         .expect("Glide could not start")
@@ -538,6 +597,9 @@ fn main() {
                     api.prevent_exit();
                 }
             }
+            // macOS: clicking Glide in the Dock (or opening it again) brings the window back.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => show_window(app),
             RunEvent::Exit => {
                 let shared = app.state::<Shared>();
                 shared.app_log.write("exit");
