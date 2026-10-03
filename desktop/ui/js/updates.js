@@ -15,6 +15,9 @@ export const onUpdateChange = (fn) => { listeners.add(fn); return () => listener
 export function handleUpdateEvent(name, data) {
   if (name === 'update.available') {
     updates.available = { version: String(data?.version ?? '') };
+  } else if (name === 'update.check') {
+    checkNow(); // from the menu bar: "Check for Updates…"
+    return true;
   } else if (name === 'update.progress') {
     const total = Number(data?.total) || 0;
     updates.progress = total > 0 ? Math.min(1, Number(data?.received) / total) : null;

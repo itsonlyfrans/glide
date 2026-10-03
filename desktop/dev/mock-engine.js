@@ -67,6 +67,12 @@ state.self.monitors = [
   { id: 'b', x: 1920, y: 0, w: 1920, h: 1080, scale: 1, primary: false },
 ];
 
+// Test the window's "engine keeps stopping" screen: start, complain, and exit.
+if (process.env.GLIDE_MOCK_CRASH) {
+  console.error('2026-10-03T12:00:00Z ERROR glided: Error: could not open the secure key store (simulated)');
+  setTimeout(() => process.exit(1), 150);
+}
+
 if (process.env.GLIDE_MOCK_EMPTY) { state.peers = []; state.layout.devices = [state.layout.devices[0]]; }
 
 if (process.env.GLIDE_MOCK_MAC) {

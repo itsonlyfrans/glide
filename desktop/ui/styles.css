@@ -142,6 +142,7 @@ kbd {
 .banner.error { background: rgba(255, 125, 125, .1); border-color: rgba(255, 125, 125, .4); }
 .banner.update { background: rgba(122, 162, 255, .1); border-color: rgba(122, 162, 255, .4); }
 .banner p { margin: 0; flex: 1; }
+.banner-actions { display: flex; gap: 8px; flex-wrap: wrap; flex: none; }
 .banner strong { font-weight: 600; }
 
 /* ───────── desk ───────── */

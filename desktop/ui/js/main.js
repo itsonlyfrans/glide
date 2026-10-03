@@ -3,7 +3,7 @@ import { icon } from './icons.js';
 import { call, onEvent, meta } from './api.js';
 import { store, subscribe, applyEvent, nameOf } from './store.js';
 import { toast } from './ui.js';
-import { updates, handleUpdateEvent, onUpdateChange, installNow } from './updates.js';
+import { updates, handleUpdateEvent, onUpdateChange, installNow, checkNow } from './updates.js';
 import { mountDesk } from './views/desk.js';
 import { mountDevices } from './views/devices.js';
 import { mountTransfers } from './views/transfers.js';
@@ -111,7 +111,17 @@ function permissionsCard(s) {
 function renderBanner(s) {
   const b = clear($('banner'));
   const banner = (cls, text, action) => b.append(h('div', { class: `banner ${cls}`, role: 'alert' }, h('p', null, text), action));
-  if (store.engine === 'fatal') return banner('error', store.engineMessage || 'The Glide engine stopped.');
+  if (store.engine === 'fatal') {
+    // Updating must stay possible even when the engine cannot start: a newer version is often the fix.
+    const update = updates.available
+      ? h('button', { class: 'btn sm primary', disabled: updates.installing, onclick: () => installNow() },
+        updates.installing ? 'Updating…' : `Update to ${updates.available.version}`)
+      : h('button', { class: 'btn sm', disabled: updates.checking, onclick: () => checkNow() }, updates.checking ? 'Checking…' : 'Check for updates');
+    const tryAgain = h('button', { class: 'btn sm', onclick: () => { store.engine = 'starting'; renderBanner(store.state); window.glide.startEngine(); } }, 'Try again');
+    const logs = h('button', { class: 'btn sm quiet', onclick: () => window.glide.openLogs() }, 'Open logs');
+    const note = updates.message && !updates.available ? ` ${updates.message}` : '';
+    return banner('error', `${store.engineMessage || 'The Glide engine stopped.'}${note}`, h('div', { class: 'banner-actions' }, update, tryAgain, logs));
+  }
   if (store.engine === 'down') {
     return document.body.classList.contains('attached')
       ? banner('error', 'Glide is not running in the background, so nothing is being shared.', h('button', { class: 'btn sm primary', onclick: () => window.glide.startEngine() }, 'Start Glide'))

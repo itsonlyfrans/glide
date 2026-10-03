@@ -183,6 +183,7 @@ mod tray {
         let share = CheckMenuItem::with_id(app, "share", "Share keyboard and mouse", true, false, None::<&str>)?;
         let home = MenuItem::with_id(app, "home", "Return to this computer", true, None::<&str>)?;
         let logs = MenuItem::with_id(app, "logs", "Show logs", true, None::<&str>)?;
+        let updates = MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
         let quit = MenuItem::with_id(app, "quit", "Quit Glide", true, None::<&str>)?;
         let menu = Menu::with_items(
             app,
@@ -191,6 +192,7 @@ mod tray {
                 &PredefinedMenuItem::separator(app)?,
                 &share,
                 &home,
+                &updates,
                 &logs,
                 &PredefinedMenuItem::separator(app)?,
                 &quit,
@@ -223,6 +225,11 @@ mod tray {
                         });
                     }
                     "logs" => super::open_logs(app),
+                    "updates" => {
+                        show_window(app);
+                        use tauri::Emitter;
+                        let _ = app.emit_to("main", "glide:event", json!({ "name": "update.check", "data": {} }));
+                    }
                     "quit" => {
                         shared.quitting.store(true, std::sync::atomic::Ordering::Release);
                         app.exit(0);
@@ -266,8 +273,11 @@ mod tray {
 
 fn open_logs(app: &AppHandle) {
     let shared = app.state::<Shared>();
+    // On a Mac the window starts the engine and keeps its full output (with any error) in logs/engine.log. On Windows
+    // the engine runs on its own and writes engine/logs itself.
+    let window_logs = shared.data_root.join("logs");
     let engine_logs = shared.data_root.join("engine").join("logs");
-    let dir = if engine_logs.is_dir() { engine_logs } else { shared.data_root.join("logs") };
+    let dir = if window_logs.join("engine.log").is_file() || !engine_logs.is_dir() { window_logs } else { engine_logs };
     let _ = std::fs::create_dir_all(&dir);
     let _ = app.opener().open_path(dir.to_string_lossy(), None::<&str>);
 }
@@ -306,6 +316,7 @@ async fn glide_quit_engine(app: AppHandle, state: State<'_, Shared>) -> Result<(
 
 #[tauri::command]
 async fn glide_start_engine(state: State<'_, Shared>) -> Result<(), ()> {
+    state.engine.reset_restarts();
     state.engine.start().await;
     Ok(())
 }

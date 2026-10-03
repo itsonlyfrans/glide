@@ -82,6 +82,10 @@ pub struct Engine {
     replacing: AtomicBool,
     restarts: AtomicU32,
     child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    /// The engine's last few lines of error output, to say why it stopped.
+    recent: Mutex<std::collections::VecDeque<String>>,
+    /// When the running engine said it was ready; a crash soon after still counts as "keeps stopping".
+    ready_at: Mutex<Option<std::time::Instant>>,
 }
 
 impl Engine {
@@ -97,6 +101,8 @@ impl Engine {
             replacing: AtomicBool::new(false),
             restarts: AtomicU32::new(0),
             child: tokio::sync::Mutex::new(None),
+            recent: Mutex::new(std::collections::VecDeque::new()),
+            ready_at: Mutex::new(None),
         })
     }
 
@@ -193,10 +199,15 @@ impl Engine {
                                 .unwrap_or_else(|| json!({ "code": "internal", "message": "Unknown error" })) })
                         };
                         let _ = waiter.send(answer);
+                    } else if let Some(text) = message.pointer("/error/message").and_then(Value::as_str) {
+                        // Nobody asked: the engine is explaining why it could not start (id 0). Keep it.
+                        (me.log)(&format!("Error: {text}"));
+                        let mut recent = me.recent.lock().unwrap_or_else(|p| p.into_inner());
+                        recent.push_back(format!("Error: {text}"));
                     }
                 } else if let Some(event) = message.get("event").and_then(Value::as_str) {
                     if event == "ready" {
-                        me.restarts.store(0, Ordering::Release);
+                        *me.ready_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
                     }
                     (me.events)(event, message.get("data").cloned().unwrap_or_else(|| json!({})));
                 }
@@ -226,6 +237,18 @@ impl Engine {
         }
         (self.events)("engine.down", json!({}));
         if self.opts.mode == Mode::Stdio {
+            // Say how it ended (exit code or signal) in the log next to its own output.
+            if let Some(child) = self.child.lock().await.as_mut() {
+                if let Ok(Ok(status)) = tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+                    (self.log)(&format!("engine exited: {status}"));
+                }
+            }
+            // Only an engine that ran for a while starts the count again; one that dies right after starting keeps
+            // counting, so the window stops retrying and says why instead of "Restarting…" forever.
+            let ran = self.ready_at.lock().unwrap_or_else(|p| p.into_inner()).take();
+            if ran.is_some_and(|t| t.elapsed() > Duration::from_secs(30)) {
+                self.restarts.store(0, Ordering::Release);
+            }
             let attempt = self.restarts.fetch_add(1, Ordering::AcqRel) + 1;
             if attempt <= 5 {
                 tokio::time::sleep(Duration::from_millis((250u64 << attempt).min(4000))).await;
@@ -234,12 +257,31 @@ impl Engine {
                     tauri::async_runtime::spawn(async move { me.start().await });
                 }
             } else {
-                (self.events)(
-                    "engine.fatal",
-                    json!({ "message": "The Glide engine keeps stopping. Open the logs folder from Settings for details." }),
-                );
+                let reason = self.last_reason();
+                let message = match reason {
+                    Some(reason) => format!("The Glide engine keeps stopping. Its last message was: {reason}"),
+                    None => "The Glide engine keeps stopping.".to_string(),
+                };
+                (self.events)("engine.fatal", json!({ "message": message }));
             }
         }
+    }
+
+    /// The most telling recent line of the engine's error output: the last error, else the last warning.
+    fn last_reason(&self) -> Option<String> {
+        let recent = self.recent.lock().unwrap_or_else(|p| p.into_inner());
+        let pick = |needle: &str| recent.iter().rev().find(|l| l.contains(needle)).cloned();
+        pick("Error").or_else(|| pick("ERROR")).or_else(|| pick("WARN")).map(|line| {
+            let line = line.trim();
+            // Drop the timestamp and level prefix the engine's log lines start with.
+            let text = line.split_once(": ").map_or(line, |(_, rest)| rest);
+            text.chars().take(240).collect()
+        })
+    }
+
+    /// Start again after the engine kept stopping (the window's "Try again").
+    pub fn reset_restarts(&self) {
+        self.restarts.store(0, Ordering::Release);
     }
 
     // ---------------------------------------------------------------- stdio (macOS, mock)
@@ -265,11 +307,16 @@ impl Engine {
         let stdin = child.stdin.take().ok_or("engine stdin unavailable")?;
         let stdout = child.stdout.take().ok_or("engine stdout unavailable")?;
         if let Some(stderr) = child.stderr.take() {
-            let log = self.log.clone();
+            let me = self.clone();
             tauri::async_runtime::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    log(&line);
+                    (me.log)(&line);
+                    let mut recent = me.recent.lock().unwrap_or_else(|p| p.into_inner());
+                    if recent.len() == 20 {
+                        recent.pop_front();
+                    }
+                    recent.push_back(line);
                 }
             });
         }
