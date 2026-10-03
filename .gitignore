@@ -1,0 +1,14 @@
+node_modules/
+target/
+*.log
+
+# local-only working files
+shots/
+SIGNING_PROMPT.md
+installers/
+*WORKLOG*.md
+Glide_user_changelog.*
+Glide_user_changelog_media/
+.user-changelog.lock
+.task/
+.shots/

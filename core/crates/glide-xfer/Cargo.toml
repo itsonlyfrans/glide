@@ -1,0 +1,29 @@
+[package]
+name = "glide-xfer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["file-engine"]
+file-engine = ["dep:zstd", "dep:blake3"]
+native-transfer = ["file-engine", "dep:glide-net"]
+test-support = ["native-transfer", "glide-net/test-support"]
+
+[dependencies]
+glide-proto.workspace = true
+glide-platform.workspace = true
+glide-net = { workspace = true, optional = true }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+zstd = { workspace = true, optional = true }
+blake3 = { workspace = true, optional = true }
+bytes.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Glide uses system events to share your mouse and keyboard between computers.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Glide connects to your other computers on this network to share your mouse, keyboard and clipboard.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_glide._udp</string>
+  </array>
+  <key>NSAppSleepDisabled</key>
+  <true/>
+  <key>LSUIElement</key>
+  <false/>
+</dict>
+</plist>

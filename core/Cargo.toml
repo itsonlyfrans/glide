@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = ["crates/glide-proto", "crates/glide-platform", "crates/glide-platform-win", "crates/glide-platform-mac", "crates/glide-net", "crates/glide-xfer", "crates/glide-daemon"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+glide-proto = { path = "crates/glide-proto" }
+glide-platform = { path = "crates/glide-platform" }
+glide-platform-win = { path = "crates/glide-platform-win" }
+glide-platform-mac = { path = "crates/glide-platform-mac" }
+glide-net = { path = "crates/glide-net" }
+glide-xfer = { path = "crates/glide-xfer" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "net", "sync", "time", "fs", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1", features = ["alloc", "use-std"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rcgen = { version = "0.14", features = ["pem", "ring"] }
+spake2 = "0.4"
+mdns-sd = "0.21"
+keyring = { version = "4", default-features = false }
+zeroize = { version = "1", features = ["derive"] }
+sha2 = "0.11"
+hkdf = "0.13"
+hmac = "0.13"
+ring = "0.17"
+subtle = "2"
+rand = "0.10"
+hex = "0.4"
+bytes = "1"
+zstd = "0.14"
+blake3 = "1"
+tempfile = "3"
+crossbeam-channel = "0.5"
+proptest = "1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_System_Ole", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_Security"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Ole", "Win32_System_DataExchange", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+core-graphics = "0.25"
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSApplication", "NSImage", "NSBitmapImageRep"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSString", "NSURL", "NSTimer", "NSRunLoop", "NSNotification", "NSFileManager"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = true

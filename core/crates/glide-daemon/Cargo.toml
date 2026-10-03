@@ -1,0 +1,39 @@
+[package]
+name = "glide-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "glided"
+path = "src/main.rs"
+
+[dependencies]
+glide-proto.workspace = true
+glide-platform.workspace = true
+glide-net.workspace = true
+glide-xfer = { workspace = true, features = ["native-transfer"] }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+tempfile.workspace = true
+rand.workspace = true
+hex.workspace = true
+crossbeam-channel.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+glide-platform-win.workspace = true
+windows-sys.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+glide-platform-mac.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+glide-net = { workspace = true, features = ["test-support"] }

@@ -1,0 +1,4 @@
+# The supplied external target directory exceeds MSVC link.exe's path limit.
+# Use the MSVC-compatible LLVM linker bundled with the Rust toolchain.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

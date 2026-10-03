@@ -1,0 +1,42 @@
+name: Glide core
+on:
+  push:
+    paths: ["core/**", "SPEC.md", ".github/workflows/core.yml"]
+  pull_request:
+    paths: ["core/**", "SPEC.md", ".github/workflows/core.yml"]
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build outside the repository
+        shell: bash
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/glide-target" >> "$GITHUB_ENV"
+      - run: rustup component add rustfmt clippy
+      - run: cargo fetch --locked
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - run: cargo build --locked --release -p glide-daemon --bin glided
+      - if: runner.os == 'Windows'
+        run: |
+          rustup target add aarch64-apple-darwin
+          cargo check --locked -p glide-platform -p glide-proto --target aarch64-apple-darwin
+          Compress-Archive -Path "$env:CARGO_TARGET_DIR/release/glided.exe" -DestinationPath "$env:CARGO_TARGET_DIR/glided-windows.zip"
+      - if: runner.os == 'macOS'
+        run: tar -czf "$CARGO_TARGET_DIR/glided-macos.tar.gz" -C "$CARGO_TARGET_DIR/release" glided
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glided-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/glide-target/glided-windows.zip
+            ${{ runner.temp }}/glide-target/glided-macos.tar.gz
+          if-no-files-found: error

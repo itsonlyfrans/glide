@@ -1,0 +1,16 @@
+[package]
+name = "glide-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glide-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+

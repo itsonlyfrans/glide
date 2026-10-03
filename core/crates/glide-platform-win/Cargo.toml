@@ -1,0 +1,15 @@
+[package]
+name = "glide-platform-win"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glide-platform.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+crossbeam-channel.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+windows = { workspace = true, features = ["Win32_System_Com_StructuredStorage"] }

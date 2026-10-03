@@ -1,0 +1,18 @@
+[package]
+name = "glide-platform-mac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glide-platform.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+crossbeam-channel.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics.workspace = true
+core-foundation.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = ["NSImageRep"] }
+objc2-foundation.workspace = true

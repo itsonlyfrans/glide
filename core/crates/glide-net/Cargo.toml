@@ -1,0 +1,52 @@
+[package]
+name = "glide-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["native-transport"]
+test-support = ["native-transport"]
+native-transport = ["dep:quinn", "dep:quinn-proto", "dep:rustls", "dep:rcgen", "dep:spake2", "dep:rand_core_06", "dep:mdns-sd", "dep:keyring", "dep:windows-sys", "dep:core-foundation", "dep:ring"]
+
+[dependencies]
+glide-proto.workspace = true
+glide-platform.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+quinn = { workspace = true, optional = true }
+quinn-proto = { version = "=0.11.19", default-features = false, features = ["rustls-ring"], optional = true }
+rustls = { workspace = true, optional = true }
+rcgen = { workspace = true, optional = true }
+spake2 = { workspace = true, optional = true }
+# spake2 0.4 (kept at its latest stable release) takes rand_core 0.6 RNG traits;
+# this edge only names that trait version for an OS-CSPRNG adapter (no new crate).
+rand_core_06 = { package = "rand_core", version = "0.6", default-features = false, optional = true }
+mdns-sd = { workspace = true, optional = true }
+zeroize.workspace = true
+sha2.workspace = true
+hkdf.workspace = true
+hmac.workspace = true
+ring = { workspace = true, optional = true }
+subtle.workspace = true
+hex.workspace = true
+bytes.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+keyring = { workspace = true, optional = true, features = ["v1"] }
+windows-sys = { workspace = true, optional = true, features = ["Win32_Media", "Win32_Networking_WinSock", "Win32_Security_Credentials"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, optional = true, features = ["v1"] }
+core-foundation = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true
