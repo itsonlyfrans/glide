@@ -14,6 +14,21 @@ const PATHS = {
   copy: `<svg viewBox="0 0 24 24" ${S}><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.500 8.500V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.500a2 2 0 0 0 2 2h2.500"/></svg>`,
   x: `<svg viewBox="0 0 24 24" ${S}><path d="m6 6 12 12M18 6 6 18"/></svg>`,
   home: `<svg viewBox="0 0 24 24" ${S}><path d="m4 11 8-7 8 7M6 9.500V20h12V9.500"/></svg>`,
+  pointer: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.5 3.2v15.6l4.1-3.900 2.700 6.100 2.900-1.300-2.700-5.900h5.700z"/></svg>`,
+  power: `<svg viewBox="0 0 24 24" ${S}><path d="M12 3v8M7.200 6.300a7.500 7.500 0 1 0 9.600 0"/></svg>`,
+  group: `<svg viewBox="0 0 24 24" ${S}><rect x="3" y="5" width="18" height="14" rx="2.500"/><path d="M12 5v14"/></svg>`,
+  ungroup: `<svg viewBox="0 0 24 24" ${S}><rect x="2.500" y="5" width="8" height="14" rx="2"/><rect x="13.500" y="5" width="8" height="14" rx="2"/></svg>`,
 };
+
+// Small line drawings of the kind of computer, for the Desk's details panel.
+const ART = {
+  laptop: `<svg viewBox="0 0 64 44" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="11" y="5" width="42" height="28" rx="3"/><rect x="15" y="9" width="34" height="20" rx="1" fill="currentColor" fill-opacity=".14" stroke="none"/><path d="M4 35h56l-3.500 4.500a2 2 0 0 1-1.600.800H9.100a2 2 0 0 1-1.600-.800z" fill="currentColor" fill-opacity=".22"/><path d="M27 35.500h10" stroke-linecap="round"/></svg>`,
+  desktop: `<svg viewBox="0 0 64 44" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="6" y="4" width="40" height="27" rx="3"/><rect x="10" y="8" width="32" height="19" rx="1" fill="currentColor" fill-opacity=".14" stroke="none"/><path d="M23 31v5M29 31v5M17 39h18" stroke-linecap="round"/><rect x="50" y="10" width="10" height="30" rx="2"/><circle cx="55" cy="16" r="1.500" fill="currentColor"/></svg>`,
+  mini: `<svg viewBox="0 0 64 44" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="8" y="22" width="48" height="13" rx="5" fill="currentColor" fill-opacity=".14"/><path d="M14 35.500h36" stroke-linecap="round" stroke-opacity=".5"/><circle cx="48" cy="28.500" r="1.500" fill="currentColor"/></svg>`,
+  studio: `<svg viewBox="0 0 64 44" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="14" y="12" width="36" height="25" rx="5" fill="currentColor" fill-opacity=".14"/><circle cx="21" cy="29" r="1.500" fill="currentColor"/><path d="M27 29h5M36 29h8" stroke-linecap="round"/></svg>`,
+  imac: `<svg viewBox="0 0 64 44" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="10" y="3" width="44" height="31" rx="3"/><rect x="13" y="6" width="38" height="21" rx="1" fill="currentColor" fill-opacity=".14" stroke="none"/><path d="M10 27h44M28 34l-2 7h12l-2-7" /></svg>`,
+  tower: `<svg viewBox="0 0 64 44" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="20" y="3" width="24" height="38" rx="3" fill="currentColor" fill-opacity=".14"/><path d="M26 10h12M26 15h12M26 20h12" stroke-linecap="round" stroke-opacity=".6"/><circle cx="32" cy="33" r="2" fill="currentColor"/></svg>`,
+};
+export const deviceArt = (kind, cls) => svg(ART[kind] ?? ART.desktop, cls);
 export const icon = (name, cls) => svg(PATHS[name], cls);
 export const osIcon = (os, cls) => icon(os === 'macos' ? 'macos' : 'windows', cls);

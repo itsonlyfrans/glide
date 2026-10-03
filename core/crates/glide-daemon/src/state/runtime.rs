@@ -497,6 +497,7 @@ impl Core {
                         y: delta_y,
                     },
                 );
+                let before = self.engine.cursor();
                 let events = self.engine.move_by(
                     Point {
                         x: delta_x,
@@ -505,6 +506,13 @@ impl Core {
                     Instant::now(),
                 );
                 self.process_engine_events(events).await?;
+                self.wake_if_reaching_for_a_sleeping_peer(
+                    before,
+                    Point {
+                        x: delta_x,
+                        y: delta_y,
+                    },
+                );
                 if let Some((target, pos)) = self.engine.forwarded_position() {
                     self.outgoing_seq = self.outgoing_seq.wrapping_add(1);
                     match self.link.peer_token(target) {
@@ -559,6 +567,113 @@ impl Core {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The cursor was pushed against a screen edge where a sleeping, wakeable computer sits on the desk: wake it.
+    /// At most one wake-up per computer per minute.
+    fn wake_if_reaching_for_a_sleeping_peer(&mut self, before: Point, delta: Point) {
+        if self.engine.forwarding_to().is_some()
+            || !self
+                .state
+                .peers
+                .iter()
+                .any(|p| !p.online && p.wake_mac.is_some())
+        {
+            return;
+        }
+        let after = self.engine.cursor();
+        let (blocked_x, blocked_y) = (before.x + delta.x - after.x, before.y + delta.y - after.y);
+        let length = blocked_x.hypot(blocked_y);
+        if length < 1.0 {
+            return;
+        }
+        let probe = Point {
+            x: after.x + blocked_x / length * 24.0,
+            y: after.y + blocked_y / length * 24.0,
+        };
+        let Some(peer) =
+            crate::wake::sleeping_peer_at(probe, &self.state.layout.devices, &self.state.peers)
+        else {
+            return;
+        };
+        let now = Instant::now();
+        if self
+            .wake_sent
+            .get(&peer.device_id)
+            .is_some_and(|sent| now.duration_since(*sent) < Duration::from_secs(60))
+        {
+            return;
+        }
+        let (Some(mac), ip, id, name) = (
+            peer.wake_mac.clone(),
+            crate::wake::peer_ip(peer),
+            peer.device_id.clone(),
+            peer.name.clone(),
+        ) else {
+            return;
+        };
+        self.wake_sent.insert(id, now);
+        tokio::task::spawn_blocking(move || {
+            let _ = crate::wake::send(&mac, ip);
+        });
+        self.events.push(Event::Notification(Notification {
+            level: "info".into(),
+            title: format!("Waking {name}"),
+            body: "It can take a few seconds to wake up and reconnect.".into(),
+            action: None,
+        }));
+    }
+
+    /// Read this computer's model once, in the background; when it is known, tell the connected computers.
+    pub(super) async fn learn_own_model(&mut self) {
+        if !self.model_started && self.native_manager.is_some() {
+            self.model_started = true;
+            let slot = self.model_found.clone();
+            let monitors = self.native_monitors.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Some(model) = crate::device::detect(&monitors) {
+                    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(model);
+                }
+            });
+        }
+        let found = self
+            .model_found
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(model) = found {
+            if self.state.self_info.model.as_ref() != Some(&model) {
+                self.state.self_info.model = Some(model);
+                self.dirty = true;
+            }
+            self.send_details(None).await;
+        }
+    }
+
+    /// Tell connected computers (or one) what kind of computer this is. Only peers on 0.2.2 or newer understand it.
+    pub(super) async fn send_details(&mut self, only: Option<&str>) {
+        let Some(model) = self.state.self_info.model.clone() else {
+            return;
+        };
+        let targets: Vec<String> = self
+            .state
+            .peers
+            .iter()
+            .filter(|p| {
+                p.online
+                    && only.is_none_or(|id| id == p.device_id)
+                    && wire::understands_details(p.app_version.as_deref())
+            })
+            .map(|p| p.device_id.clone())
+            .collect();
+        for target in targets {
+            let message = WireMessage::Control(ControlMessage::Details(wire::DeviceDetails {
+                model: model.name.clone(),
+                kind: model.kind.clone(),
+                builtin_monitor: model.builtin_monitor.clone(),
+            }));
+            let _ = self.send_reliable(&target, message).await;
+        }
     }
 
     /// One latest position survives short transport lock contention, even if capture stops.
@@ -1059,6 +1174,39 @@ impl Core {
             WireMessage::Control(ControlMessage::Bye(_)) => {
                 self.end_forwarding("peer_left").await?;
             }
+            WireMessage::Control(ControlMessage::Details(details)) => {
+                let model = DeviceModel {
+                    name: details.model,
+                    kind: details.kind,
+                    builtin_monitor: details.builtin_monitor,
+                };
+                if self
+                    .state
+                    .peers
+                    .iter()
+                    .any(|p| p.device_id == id && p.model.as_ref() != Some(&model))
+                {
+                    let mut next = self.state.clone();
+                    if let Some(peer) = next.peers.iter_mut().find(|p| p.device_id == id) {
+                        peer.model = Some(model);
+                    }
+                    self.apply(next)?;
+                    self.dirty = true;
+                }
+            }
+            WireMessage::Control(ControlMessage::Arrange(arrange)) => {
+                // A paired computer arranged this computer's screens on its Desk: apply it exactly as if it was done here.
+                let arrangement: Vec<Value> = arrange
+                    .screens
+                    .iter()
+                    .map(|s| json!({ "monitor_id": s.monitor_id, "x": s.x, "y": s.y }))
+                    .collect();
+                let patch = json!({ "patch": { "display": { "arrangement": arrangement } } });
+                if let Err(failure) = Box::pin(self.dispatch("set_settings", patch)).await {
+                    tracing::debug!(code = ?failure.code, "remote screen arrangement was not applied");
+                }
+                self.dirty = true;
+            }
             WireMessage::Control(ControlMessage::LayoutUpdate(update)) => {
                 if update.version.0 == u64::MAX {
                     tracing::debug!("dropping exhausted remote layout clock");
@@ -1430,8 +1578,32 @@ impl Core {
                             .find(|existing| existing.device_id == peer.device_id)
                         {
                             let clipboard_enabled = existing.clipboard_enabled;
+                            let wake_mac = existing.wake_mac.take();
+                            let model = existing.model.take();
+                            let mut last_monitors = std::mem::take(&mut existing.last_monitors);
+                            if !peer.monitors.is_empty() {
+                                last_monitors = peer.monitors.clone();
+                            }
                             *existing = peer;
                             existing.clipboard_enabled = clipboard_enabled;
+                            existing.wake_mac = wake_mac;
+                            existing.model = model;
+                            existing.last_monitors = last_monitors;
+                            // Just connected over the real network: note its network card address for waking it later.
+                            if connected && self.native_manager.is_some() {
+                                if let Some(ip) = crate::wake::peer_ip(existing) {
+                                    let found = self.wake_found.clone();
+                                    let device_id = existing.device_id.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        if let Some(mac) = crate::wake::lookup_mac(ip) {
+                                            found
+                                                .lock()
+                                                .unwrap_or_else(|e| e.into_inner())
+                                                .push((device_id, mac));
+                                        }
+                                    });
+                                }
+                            }
                         }
                         let layout_changed = match reconcile_layout(&next.layout.devices, &next) {
                             Ok(layout) if layout != next.layout => {
@@ -1459,6 +1631,7 @@ impl Core {
                         self.dirty = true;
                         if connected {
                             self.clipboard_peer_connected(&peer_id);
+                            self.send_details(Some(&peer_id)).await;
                         }
                         if connected || layout_changed {
                             self.broadcast_layout().await;

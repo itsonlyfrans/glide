@@ -556,3 +556,112 @@ async fn mac_on_the_bottom_ultrawide_crosses_along_its_whole_shared_edge_and_ove
     // Dropped just above the primary, flush against the right edge of the top monitor (nearest valid slot).
     assert_eq!((mac.x, mac.y), (top_right, -157.0));
 }
+
+// Feature: arrange another computer's screens from this computer's Desk. The arrangement travels to the computer that
+// owns the screens and is applied there exactly like its own settings change; a computer still on an older Glide is
+// never sent the new message (it would drop the connection) and the person is told to update it instead.
+#[tokio::test]
+async fn screens_can_be_arranged_from_another_computer_and_old_versions_are_never_sent_it() {
+    use glide_net::InMemoryLink;
+    let dir = tempfile::tempdir().expect("dir");
+    let mut core = paired_core(dir.path()).await;
+    let peer = "e".repeat(64);
+    let link = Arc::new(InMemoryLink::new());
+    link.script_reachable("127.0.0.1:24801", peer.clone());
+    link.connect("127.0.0.1:24801", Some(&peer))
+        .await
+        .expect("connect");
+    core.link = link.clone();
+    core.state.peers[0].online = true;
+    let request = Request {
+        id: 7,
+        method: "peer.arrange".into(),
+        params: serde_json::json!({ "device_id": peer, "arrangement": [
+            { "monitor_id": "m1", "x": 0.0, "y": 0.0 }
+        ] }),
+    };
+
+    core.state.peers[0].app_version = Some("0.2.1".into());
+    let refused = core.handle(request.clone()).await.expect("response");
+    assert!(!refused.ok, "an old version is not sent the new message");
+    assert!(refused
+        .error
+        .as_ref()
+        .is_some_and(|e| e.message.contains("Update Glide")));
+    assert!(link.take_sent_reliable().is_empty());
+
+    core.state.peers[0].app_version = Some("0.2.2".into());
+    assert!(core.handle(request).await.expect("response").ok);
+    assert!(link.take_sent_reliable().iter().any(|(_, m)| matches!(
+        m,
+        WireMessage::Control(ControlMessage::Arrange(a)) if a.screens.len() == 1
+    )));
+
+    // The receiving side: this computer gets an arrangement for its own two screens.
+    let input = core.mock_platform().expect("mock").input.clone();
+    input
+        .set_monitors(vec![
+            monitor("top", 870.0, 0.0, 3413.0, 960.0, false),
+            monitor("bottom", 0.0, 960.0, 5120.0, 1440.0, true),
+        ])
+        .expect("screens");
+    core.tick().await.expect("hot-plug handled");
+    core.receive_link(LinkEvent::Reliable {
+        peer_id: peer.clone(),
+        peer_token: None,
+        message: WireMessage::Control(ControlMessage::Arrange(wire::Arrange {
+            screens: vec![
+                wire::ArrangedScreen {
+                    monitor_id: "bottom".into(),
+                    x: 0.0,
+                    y: 0.0,
+                },
+                wire::ArrangedScreen {
+                    monitor_id: "top".into(),
+                    x: 5120.0,
+                    y: 0.0,
+                },
+            ],
+        })),
+    })
+    .await
+    .expect("applied");
+    let top = core
+        .snapshot()
+        .self_info
+        .monitors
+        .into_iter()
+        .find(|m| m.id == "top")
+        .expect("top");
+    assert_eq!(
+        (top.x, top.y),
+        (5120.0, 0.0),
+        "arranged as chosen on the other computer"
+    );
+}
+
+// Feature: each computer tells the others what it is (MacBook Pro 16-inch, Mac Studio...) for its picture on the Desk.
+#[tokio::test]
+async fn a_computers_model_is_remembered_across_reconnects() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut core = paired_core(dir.path()).await;
+    let peer = core.state.peers[0].device_id.clone();
+    core.receive_link(LinkEvent::Reliable {
+        peer_id: peer.clone(),
+        peer_token: None,
+        message: WireMessage::Control(ControlMessage::Details(wire::DeviceDetails {
+            model: "MacBook Pro 16-inch".into(),
+            kind: "laptop".into(),
+            builtin_monitor: Some("1".into()),
+        })),
+    })
+    .await
+    .expect("details");
+    let model = core.state.peers[0].model.clone().expect("model");
+    assert_eq!(
+        (model.name.as_str(), model.kind.as_str()),
+        ("MacBook Pro 16-inch", "laptop")
+    );
+    let restarted = Core::mock(dir.path(), None).await.expect("restart");
+    assert_eq!(restarted.state.peers[0].model, Some(model), "kept on disk");
+}

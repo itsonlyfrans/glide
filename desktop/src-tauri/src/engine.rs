@@ -26,6 +26,8 @@ pub const ALLOWED_METHODS: &[&str] = &[
     "peer.add_manual",
     "peer.unpair",
     "peer.configure",
+    "peer.wake",
+    "peer.arrange",
     "return_home",
     "transfer.cancel",
     "transfer.confirm",

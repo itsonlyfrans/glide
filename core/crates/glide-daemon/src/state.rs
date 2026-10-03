@@ -68,6 +68,13 @@ pub struct Core {
     monitor_rx: crossbeam_channel::Receiver<Vec<glide_platform::Monitor>>,
     /// This computer's screens as the operating system arranges them (the arranged ones are in `state.self_info`).
     native_monitors: Vec<glide_platform::Monitor>,
+    /// Network card addresses learned in the background: (device id, address).
+    wake_found: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    /// When each sleeping computer was last sent a wake-up, so pushing at an edge does not flood the network.
+    wake_sent: HashMap<String, Instant>,
+    /// This computer's model, read once in the background.
+    model_found: std::sync::Arc<std::sync::Mutex<Option<DeviceModel>>>,
+    model_started: bool,
     clipboard: clipboard::ClipboardSync,
     purge_cancel: glide_xfer::Cancel,
     purge_job: Option<tokio::task::JoinHandle<glide_xfer::Result<()>>>,
@@ -255,6 +262,7 @@ impl Core {
                 fingerprint: fingerprint.unwrap_or_else(|| id.clone()),
                 listen_port: settings.network.port,
                 version: env!("CARGO_PKG_VERSION").into(),
+                model: None,
                 monitors: crate::arrangement::arrange(
                     &platform.input_backend().monitors()?,
                     &settings.display.arrangement,
@@ -342,6 +350,10 @@ impl Core {
             permission_recovery_notified: false,
             monitor_rx: platform.input_backend().monitor_changes(),
             native_monitors: platform.input_backend().monitors().unwrap_or_default(),
+            wake_found: Default::default(),
+            wake_sent: HashMap::new(),
+            model_found: Default::default(),
+            model_started: false,
             clipboard: clipboard::ClipboardSync::new(platform.clipboard_backend().subscribe()),
             purge_cancel: glide_xfer::Cancel::new(),
             purge_job: None,
@@ -839,6 +851,94 @@ impl Core {
                 }
                 Ok(json!({}))
             }
+            "peer.arrange" => {
+                let arrange: PeerArrangeParams = params(value)?;
+                let peer = self
+                    .state
+                    .peers
+                    .iter()
+                    .find(|p| p.device_id == arrange.device_id)
+                    .ok_or_else(|| error(ErrorCode::InvalidParams, "unknown device"))?;
+                let name = peer.name.clone();
+                if !peer.online {
+                    return Err(error(
+                        ErrorCode::Unreachable,
+                        format!("{name} is not connected right now."),
+                    ));
+                }
+                if !glide_proto::wire::understands_details(peer.app_version.as_deref()) {
+                    return Err(error(
+                        ErrorCode::Unreachable,
+                        format!("Update Glide on {name} to arrange its screens from here."),
+                    ));
+                }
+                if arrange.arrangement.len() > 32
+                    || arrange.arrangement.iter().any(|p| {
+                        p.monitor_id.is_empty()
+                            || p.monitor_id.len() > 64
+                            || !p.x.is_finite()
+                            || !p.y.is_finite()
+                            || p.x.abs() > 1.0e6
+                            || p.y.abs() > 1.0e6
+                    })
+                {
+                    return Err(error(
+                        ErrorCode::InvalidParams,
+                        "invalid screen arrangement",
+                    ));
+                }
+                let screens = arrange
+                    .arrangement
+                    .into_iter()
+                    .map(|p| glide_proto::wire::ArrangedScreen {
+                        monitor_id: p.monitor_id,
+                        x: p.x,
+                        y: p.y,
+                    })
+                    .collect();
+                self.send_reliable(
+                    &arrange.device_id,
+                    glide_proto::wire::WireMessage::Control(
+                        glide_proto::wire::ControlMessage::Arrange(glide_proto::wire::Arrange {
+                            screens,
+                        }),
+                    ),
+                )
+                .await
+                .map_err(|_| {
+                    error(
+                        ErrorCode::Unreachable,
+                        format!("Could not reach {name}. Try again in a moment."),
+                    )
+                })?;
+                Ok(json!({}))
+            }
+            "peer.wake" => {
+                let wake: PeerWakeParams = params(value)?;
+                let peer = self
+                    .state
+                    .peers
+                    .iter()
+                    .find(|p| p.device_id == wake.device_id)
+                    .ok_or_else(|| error(ErrorCode::InvalidParams, "unknown device"))?;
+                if peer.online {
+                    return Ok(json!({}));
+                }
+                let mac = peer.wake_mac.clone().ok_or_else(|| {
+                    error(
+                        ErrorCode::Unreachable,
+                        "Glide learns how to wake this computer the next time both are connected.",
+                    )
+                })?;
+                crate::wake::send(&mac, crate::wake::peer_ip(peer)).map_err(|_| {
+                    error(
+                        ErrorCode::Unreachable,
+                        "The wake-up signal could not be sent on this network.",
+                    )
+                })?;
+                self.wake_sent.insert(wake.device_id, Instant::now());
+                Ok(json!({}))
+            }
             "peer.configure" => {
                 let configure: PeerConfigureParams = params(value)?;
                 let mut next = self.state.clone();
@@ -978,6 +1078,22 @@ impl Core {
                 .map_err(|error| anyhow::anyhow!(error.message))?;
         }
         self.poll_permissions(Instant::now()).await;
+        self.learn_own_model().await;
+        let found = std::mem::take(&mut *self.wake_found.lock().unwrap_or_else(|e| e.into_inner()));
+        for (device_id, mac) in found {
+            if let Some(peer) = self
+                .state
+                .peers
+                .iter_mut()
+                .find(|p| p.device_id == device_id)
+            {
+                if peer.wake_mac.as_deref() != Some(mac.as_str()) {
+                    peer.wake_mac = Some(mac);
+                    let _ = self.persist(&self.state.clone());
+                    self.dirty = true;
+                }
+            }
+        }
         if self.monitor_rx.try_recv().is_ok() {
             self.end_forwarding("monitors_changed")
                 .await

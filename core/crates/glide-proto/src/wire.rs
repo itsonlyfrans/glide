@@ -153,8 +153,57 @@ pub enum ControlMessage {
     TakeOver(TakeOver),
     Enter(Enter),
     Leave(Leave),
-    EnterAck { epoch: u64 },
+    EnterAck {
+        epoch: u64,
+    },
     MetadataUpdate(MetadataUpdate),
+    /// Since 0.2.2: what kind of computer the sender is, for its picture on the Desk.
+    /// Only sent to peers whose Hello reports 0.2.2 or newer ([`understands_details`]).
+    Details(DeviceDetails),
+    /// Since 0.2.2: arrange the receiver's own screens, as chosen on the sender's Desk.
+    /// Only sent to peers whose Hello reports 0.2.2 or newer ([`understands_details`]).
+    Arrange(Arrange),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeviceDetails {
+    /// For people: "MacBook Pro 16-inch", "Mac Studio", "Windows laptop".
+    pub model: String,
+    /// For the picture: laptop, desktop, mini, studio, imac or tower.
+    pub kind: String,
+    /// The laptop's own screen, when known.
+    pub builtin_monitor: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Arrange {
+    pub screens: Vec<ArrangedScreen>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ArrangedScreen {
+    pub monitor_id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Whether a peer's app version (from its Hello) can decode [`ControlMessage::Details`] and
+/// [`ControlMessage::Arrange`]. Older versions close the connection on an unknown message.
+pub fn understands_details(app_version: Option<&str>) -> bool {
+    let Some(version) = app_version else {
+        return false;
+    };
+    let mut parts = version
+        .split(['.', '-', '+'])
+        .map(|part| part.parse::<u64>().ok());
+    match (
+        parts.next().flatten(),
+        parts.next().flatten(),
+        parts.next().flatten(),
+    ) {
+        (Some(major), Some(minor), Some(patch)) => (major, minor, patch) >= (0, 2, 2),
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -23,19 +23,22 @@ const MINI_ID = hex(64);
 const NEAR_ID = hex(64);
 
 const state = {
-  self: { device_id: SELF_ID, name: 'Studio PC', os: 'windows', fingerprint: fp(SELF_ID), listen_port: 24800, version: '0.1.0-mock' },
+  self: { device_id: SELF_ID, name: 'Studio PC', os: 'windows', fingerprint: fp(SELF_ID), listen_port: 24800, version: '0.1.0-mock',
+    model: { name: 'Windows PC', kind: 'desktop' } },
   sharing_enabled: true,
   active_device_id: SELF_ID,
   permissions: { accessibility: 'n/a', input_monitoring: 'n/a', injection: 'granted' },
   peers: [
     {
       device_id: MAC_ID, name: 'MacBook Pro', os: 'macos', fingerprint: fp(MAC_ID), online: true, connection: 'connected',
-      address: '192.168.1.42:24800', latency_ms: 2.4, clipboard_enabled: true,
+      address: '192.168.1.42:24800', latency_ms: 2.4, clipboard_enabled: true, app_version: '0.2.2',
+      model: { name: 'MacBook Pro 14-inch', kind: 'laptop', builtin_monitor: 'm1' },
       monitors: [{ id: 'm1', x: 0, y: 0, w: 1512, h: 982, scale: 2, primary: true }],
     },
     {
       device_id: MINI_ID, name: 'Mac mini', os: 'macos', fingerprint: fp(MINI_ID), online: false, connection: 'offline',
-      address: '192.168.1.57:24800', clipboard_enabled: true,
+      address: '192.168.1.57:24800', clipboard_enabled: true, app_version: '0.2.2', wake_mac: 'a4:83:e7:0a:1b:2c',
+      model: { name: 'Mac mini', kind: 'mini' },
       monitors: [{ id: 'm1', x: 0, y: 0, w: 2560, h: 1440, scale: 1, primary: true }],
     },
   ],
@@ -76,12 +79,13 @@ if (process.env.GLIDE_MOCK_MAC) {
 if (process.env.GLIDE_MOCK_USER) {
   state.self.name = 'Office PC';
   state.self.monitors = [
-    { id: '\\\\.\\DISPLAY1', x: 870, y: 0, w: 3413, h: 960, scale: 1, primary: false },
+    { id: '\\\\.\\DISPLAY1', x: 870, y: 0, w: 5120 / 1.5, h: 960, scale: 1, primary: false },
     { id: '\\\\.\\DISPLAY2', x: 0, y: 960, w: 5120, h: 1440, scale: 1.5, primary: true },
   ];
   state.peers = [{
-    device_id: MAC_ID, name: 'MacBook Air', os: 'macos', fingerprint: fp(MAC_ID), online: true, connection: 'connected',
-    address: '192.168.1.30:24800', latency_ms: 1.0, clipboard_enabled: true,
+    device_id: MAC_ID, name: 'MacBook Pro', os: 'macos', fingerprint: fp(MAC_ID), online: true, connection: 'connected',
+    address: '192.168.1.30:24800', latency_ms: 1.0, clipboard_enabled: true, app_version: '0.2.2',
+    model: { name: 'MacBook Pro 16-inch', kind: 'laptop', builtin_monitor: '1' },
     monitors: [{ id: '1', x: 0, y: 0, w: 1728, h: 1117, scale: 2, primary: true }],
   }];
   state.discovered = [];
@@ -201,6 +205,27 @@ const handlers = {
     state.peers = state.peers.filter((p) => p.device_id !== device_id);
     state.layout.devices = state.layout.devices.filter((d) => d.device_id !== device_id);
     if (state.active_device_id === device_id) state.active_device_id = SELF_ID;
+    pushState();
+    return {};
+  },
+  'peer.wake': ({ device_id }) => {
+    const p = state.peers.find((x) => x.device_id === device_id);
+    if (!p) throw { code: 'invalid_params', message: 'unknown device' };
+    if (p.online) return {};
+    if (!p.wake_mac) throw { code: 'unreachable', message: 'Glide learns how to wake this computer the next time both are connected.' };
+    p.connection = 'connecting'; pushState();
+    setTimeout(() => { p.online = true; p.connection = 'connected'; p.latency_ms = 3.1; pushState(); }, 2500);
+    return {};
+  },
+  // Like glided on the other computer: the arrangement is normalized and that computer moves on the desk by the same offset.
+  'peer.arrange': ({ device_id, arrangement }) => {
+    const p = state.peers.find((x) => x.device_id === device_id);
+    if (!p) throw { code: 'invalid_params', message: 'unknown device' };
+    if (!p.online) throw { code: 'unreachable', message: `${p.name} is not connected right now.` };
+    const minX = Math.min(...arrangement.map((a) => a.x)), minY = Math.min(...arrangement.map((a) => a.y));
+    p.monitors = p.monitors.map((m) => { const a = arrangement.find((q) => q.monitor_id === m.id); return a ? { ...m, x: a.x - minX, y: a.y - minY } : m; });
+    const placed = state.layout.devices.find((d) => d.device_id === device_id);
+    if (placed) { placed.x += minX; placed.y += minY; }
     pushState();
     return {};
   },

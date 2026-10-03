@@ -17,6 +17,10 @@ fn peer(letter: char) -> Peer {
         latency_ms: None,
         monitors: Vec::new(),
         clipboard_enabled: true,
+        wake_mac: None,
+        last_monitors: Vec::new(),
+        app_version: None,
+        model: None,
     }
 }
 fn seed(path: &Path) {

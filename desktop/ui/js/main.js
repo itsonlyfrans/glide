@@ -53,7 +53,7 @@ function renderRailFoot(s) {
   const onSelf = s.active_device_id === s.self.device_id;
   const connected = s.peers.filter((p) => p.connection === 'connected').length;
   foot.append(
-    h('div', { class: 'where' }, h('i', { class: `dot ${s.sharing_enabled ? 'cursor' : 'off'}` }),
+    h('div', { class: 'where' }, s.sharing_enabled ? icon('pointer', 'here-icon') : h('i', { class: 'dot off' }),
       s.sharing_enabled ? (onSelf ? 'Cursor is here' : `Cursor is on ${nameOf(s.active_device_id)}`) : 'Sharing paused'),
     h('div', { class: 'sub' }, `${s.self.name} · ${connected} of ${s.peers.length} connected`));
 }

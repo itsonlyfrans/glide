@@ -145,6 +145,21 @@ pub struct SelfInfo {
     pub listen_port: u16,
     pub version: String,
     pub monitors: Vec<Monitor>,
+    /// What kind of computer this is, once known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<DeviceModel>,
+}
+
+/// What kind of computer a device is, for its picture on the Desk.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeviceModel {
+    /// For people: "MacBook Pro 16-inch", "Mac Studio", "Windows laptop".
+    pub name: String,
+    /// laptop, desktop, mini, studio, imac or tower.
+    pub kind: String,
+    /// The laptop's own screen, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin_monitor: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -161,6 +176,18 @@ pub struct Peer {
     pub latency_ms: Option<f64>,
     pub monitors: Vec<Monitor>,
     pub clipboard_enabled: bool,
+    /// The network card address used to wake this computer from sleep (learned locally while connected).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_mac: Option<String>,
+    /// The screens it had when last connected, so its place on the desk is known while it sleeps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_monitors: Vec<Monitor>,
+    /// The Glide version it runs (from its last handshake).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
+    /// What kind of computer it is, once it has said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<DeviceModel>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -585,6 +612,21 @@ pub struct PeerUnpairParams {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PairingConfirmParams {
     pub accepted: bool,
+}
+
+/// Arrange a paired computer's own screens from this computer's Desk.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerArrangeParams {
+    pub device_id: String,
+    pub arrangement: Vec<MonitorPlacement>,
+}
+
+/// Wake a paired computer that is asleep.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerWakeParams {
+    pub device_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

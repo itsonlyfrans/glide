@@ -291,6 +291,36 @@ fn validate_control(message: &ControlMessage) -> Result<(), CodecError> {
             }
             validate_metadata(&update.name, &update.monitors)?;
         }
+        ControlMessage::Details(details) => {
+            let text_ok = |text: &str, max: usize| {
+                !text.trim().is_empty() && text.len() <= max && !text.chars().any(char::is_control)
+            };
+            if !text_ok(&details.model, 96)
+                || !text_ok(&details.kind, 16)
+                || details
+                    .builtin_monitor
+                    .as_deref()
+                    .is_some_and(|id| !text_ok(id, 64))
+            {
+                return Err(CodecError::InvalidValue("details"));
+            }
+        }
+        ControlMessage::Arrange(arrange) => {
+            if arrange.screens.len() > 32 {
+                return Err(CodecError::InvalidValue("arrange.screens"));
+            }
+            for screen in &arrange.screens {
+                validate_finite(screen.x, "arrange.x")?;
+                validate_finite(screen.y, "arrange.y")?;
+                if screen.monitor_id.is_empty()
+                    || screen.monitor_id.len() > 64
+                    || screen.x.abs() > 1.0e6
+                    || screen.y.abs() > 1.0e6
+                {
+                    return Err(CodecError::InvalidValue("arrange.screen"));
+                }
+            }
+        }
         ControlMessage::Heartbeat(_)
         | ControlMessage::HeartbeatAck(_)
         | ControlMessage::Bye(_)

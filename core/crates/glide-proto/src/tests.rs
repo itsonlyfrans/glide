@@ -29,6 +29,7 @@ fn sample_state() -> State {
             fingerprint: "fingerprint".to_owned(),
             listen_port: 24800,
             version: "0.1.0".to_owned(),
+            model: None,
             monitors: vec![sample_monitor()],
         },
         sharing_enabled: true,
@@ -50,6 +51,10 @@ fn sample_state() -> State {
             latency_ms: Some(1.25),
             monitors: vec![sample_monitor()],
             clipboard_enabled: true,
+            wake_mac: None,
+            last_monitors: Vec::new(),
+            app_version: None,
+            model: None,
         }],
         discovered: vec![DiscoveredPeer {
             device_id: "nearby-id".to_owned(),
@@ -622,4 +627,61 @@ proptest! {
         let _ = decode_transfer(&bytes);
         let _ = decode_wire(&bytes);
     }
+}
+
+// Older Glide versions close the connection on a message they do not know, so the new ones are only sent to 0.2.2+.
+#[test]
+fn only_new_enough_versions_are_sent_device_details_and_arrangements() {
+    use crate::wire::understands_details;
+    assert!(!understands_details(None));
+    assert!(!understands_details(Some("0.2.1")));
+    assert!(!understands_details(Some("0.1.9")));
+    assert!(!understands_details(Some("test")));
+    assert!(understands_details(Some("0.2.2")));
+    assert!(understands_details(Some("0.3.0")));
+    assert!(understands_details(Some("1.0.0-beta.1")));
+}
+
+// The new messages survive the wire and nonsense versions of them are rejected.
+#[test]
+fn device_details_and_arrangements_round_trip_and_reject_nonsense() {
+    use crate::wire::{Arrange, ArrangedScreen, DeviceDetails};
+    let details = ControlMessage::Details(DeviceDetails {
+        model: "Mac Studio".into(),
+        kind: "studio".into(),
+        builtin_monitor: None,
+    });
+    assert_eq!(
+        decode_control(&encode_control(&details).unwrap()).unwrap(),
+        details
+    );
+    let arrange = ControlMessage::Arrange(Arrange {
+        screens: vec![ArrangedScreen {
+            monitor_id: "2".into(),
+            x: 1728.0,
+            y: -300.0,
+        }],
+    });
+    assert_eq!(
+        decode_control(&encode_control(&arrange).unwrap()).unwrap(),
+        arrange
+    );
+    let bad = ControlMessage::Details(DeviceDetails {
+        model: "line\nbreak".into(),
+        kind: "laptop".into(),
+        builtin_monitor: None,
+    });
+    assert!(
+        encode_control(&bad).is_err() || decode_control(&encode_control(&bad).unwrap()).is_err()
+    );
+    let far = ControlMessage::Arrange(Arrange {
+        screens: vec![ArrangedScreen {
+            monitor_id: "2".into(),
+            x: f64::NAN,
+            y: 0.0,
+        }],
+    });
+    assert!(
+        encode_control(&far).is_err() || decode_control(&encode_control(&far).unwrap()).is_err()
+    );
 }

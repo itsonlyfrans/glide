@@ -236,6 +236,7 @@ mod tests {
                 fingerprint: "fp".to_owned(),
                 listen_port: 0,
                 version: "test".to_owned(),
+                model: None,
                 monitors: vec![],
             },
             sharing_enabled: true,

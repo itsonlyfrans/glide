@@ -1300,6 +1300,10 @@ fn prepare_pending(
         latency_ms: None,
         monitors: Vec::new(),
         clipboard_enabled: true,
+        wake_mac: None,
+        last_monitors: Vec::new(),
+        app_version: None,
+        model: None,
     };
     let (decision, decisions) = mpsc::channel(1);
     let result = Arc::new(Mutex::new(None));

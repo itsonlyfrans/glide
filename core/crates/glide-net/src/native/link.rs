@@ -369,6 +369,10 @@ impl NativeLink {
                 latency_ms: None,
                 monitors: hello.monitors.clone().into_vec(),
                 clipboard_enabled: true,
+                wake_mac: None,
+                last_monitors: Vec::new(),
+                app_version: Some(hello.app_version.clone()),
+                model: None,
             }),
             epochs: Mutex::new(InputEpochs::default()),
             outgoing_epoch: AtomicU64::new(0),
@@ -452,6 +456,10 @@ impl NativeLink {
                 latency_ms: None,
                 monitors: hello.monitors.into_vec(),
                 clipboard_enabled: true,
+                wake_mac: None,
+                last_monitors: Vec::new(),
+                app_version: Some(hello.app_version.clone()),
+                model: None,
             };
             let _ = self
                 .0
@@ -1432,7 +1440,8 @@ async fn read_frame(
     let mut variant = [0];
     timed(recv.read_exact(&mut variant)).await?;
     let variant_max = match (lane, variant[0]) {
-        (CONTROL, 0..=10) => wire::MAX_CONTROL_FRAME_BYTES,
+        // 11 = Details, 12 = Arrange (0.2.2+; only sent to peers that report 0.2.2 or newer).
+        (CONTROL, 0..=12) => wire::MAX_CONTROL_FRAME_BYTES,
         (INPUT, 0..=3) => wire::MAX_INPUT_FRAME_BYTES,
         (CLIPBOARD, 0) => wire::MAX_CLIP_ANNOUNCE_FRAME_BYTES,
         (CLIPBOARD, 1 | 3) => wire::MAX_INPUT_FRAME_BYTES,

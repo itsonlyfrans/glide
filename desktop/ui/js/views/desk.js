@@ -1,5 +1,5 @@
 import { h, clear, osName } from '../dom.js';
-import { icon, osIcon } from '../icons.js';
+import { icon, osIcon, deviceArt } from '../icons.js';
 import { call } from '../api.js';
 import { store, onActiveChanged } from '../store.js';
 import { confirmModal, toast } from '../ui.js';
@@ -8,12 +8,18 @@ import { openHostModal } from '../pair.js';
 const SNAP_PX = 16;      // snap distance in screen pixels
 const MARGIN = 0.3;      // spare room around the layout, as a fraction of its size
 
+// Which computers have their screens "ungrouped" (moved one by one). Remembered on this computer only.
+const SEPARATE_KEY = 'glide.desk.separate';
+const separate = (() => { try { return new Set(JSON.parse(localStorage.getItem(SEPARATE_KEY) || '[]')); } catch { return new Set(); } })();
+const saveSeparate = () => { try { localStorage.setItem(SEPARATE_KEY, JSON.stringify([...separate])); } catch { /* not essential */ } };
+
 // Devices on the canvas: self + every paired peer, with sizes from their monitors.
 function collectDevices(state) {
   const placed = new Map(state.layout.devices.map((d) => [d.device_id, d]));
   const all = [{ id: state.self.device_id, dev: state.self, self: true }, ...state.peers.map((p) => ({ id: p.device_id, dev: p }))];
   const list = all.map(({ id, dev, self }) => {
-    const mons = dev.monitors?.length ? dev.monitors : [{ id: 'm', x: 0, y: 0, w: 1920, h: 1080, scale: 1, primary: true }];
+    const known = dev.monitors?.length ? dev.monitors : dev.last_monitors;
+    const mons = known?.length ? known : [{ id: 'm', x: 0, y: 0, w: 1920, h: 1080, scale: 1, primary: true }];
     const minX = Math.min(...mons.map((m) => m.x)), minY = Math.min(...mons.map((m) => m.y));
     const w = Math.max(...mons.map((m) => m.x + m.w)) - minX, hgt = Math.max(...mons.map((m) => m.y + m.h)) - minY;
     return { id, dev, self: !!self, w, h: hgt, mons: mons.map((m) => ({ ...m, x: m.x - minX, y: m.y - minY })), x: placed.get(id)?.x, y: placed.get(id)?.y };
@@ -22,6 +28,21 @@ function collectDevices(state) {
   let right = Math.max(0, ...list.filter((d) => d.x != null).map((d) => d.x + d.w));
   for (const d of list) if (d.x == null) { d.x = right + 120; d.y = 0; right = d.x + d.w; }
   return list;
+}
+
+// Real pixels of a screen, as people know their monitors: "5120 × 1440". Windows reports every screen in one shared
+// unit (the main screen's scaling), macOS in points (Retina screens have 2 pixels per point).
+function pixels(d, m) {
+  const factor = d.dev.os === 'macos' ? (m.scale || 1) : ((d.mons.find((x) => x.primary) ?? d.mons[0]).scale || 1);
+  return `${Math.round(m.w * factor)} × ${Math.round(m.h * factor)}`;
+}
+
+// The laptop's own screen, if this computer is a laptop: the one it reported, else its only screen.
+function builtinIndex(d) {
+  const model = d.dev.model;
+  if (model?.kind !== 'laptop') return -1;
+  const i = d.mons.findIndex((m) => m.id === model.builtin_monitor);
+  return i >= 0 ? i : (d.mons.length === 1 ? 0 : -1);
 }
 
 // Everything below works on the real MONITOR rectangles, not on a computer's overall bounding box: a computer with two
@@ -90,8 +111,21 @@ function seams(list) {
   return out;
 }
 
+// External monitors standing on the desk get a stand: only the lowest screen in each column (nothing of the same
+// computer directly below it).
+const standsOn = (d, i) => {
+  const m = d.mons[i];
+  return !d.mons.some((o, j) => j !== i && o.y >= m.y + m.h - 1 && o.x < m.x + m.w && o.x + o.w > m.x);
+};
+
 export function mountDesk(root) {
   const canvas = h('div', { class: 'canvas' });
+  // Everything on the desk lives in one layer: looking around only moves this layer (no re-layout), so panning stays
+  // smooth even on a busy computer.
+  const world = h('div', { class: 'world' });
+  const groupBtn = h('button', { class: 'btn sm group-toggle', onpointerdown: (e) => e.stopPropagation(), onclick: () => toggleGroup(store.selectedId) });
+  world.append(groupBtn);
+  canvas.append(world);
   const threadSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   threadSvg.setAttribute('class', 'thread');
   const wrap = h('div', { class: 'canvas-wrap' }, canvas, threadSvg,
@@ -108,16 +142,17 @@ export function mountDesk(root) {
   let fitScale = 0.1;                  // the scale "Center view" uses; zoom is limited around it
   let dragging = null;
   let panning = null;
-  let frame = 0, framePaint = false;
+  let frame = 0, framePaint = false, frameFull = false;
   // Redraw at most once per display frame, however many pointer or wheel events arrive in between.
-  const schedule = (withPaint) => {
+  const schedule = (withPaint, full = true) => {
     framePaint ||= withPaint;
+    frameFull ||= full;
     if (frame) return;
     frame = requestAnimationFrame(() => {
       frame = 0;
-      place();
+      if (frameFull) place(); else placeWorld();
       if (framePaint) paint(store.state);
-      framePaint = false;
+      framePaint = false; frameFull = false;
     });
   };
   // Let computers glide to a new spot (after a drop or a change from the engine) instead of jumping.
@@ -127,9 +162,11 @@ export function mountDesk(root) {
     clearTimeout(settleTimer);
     settleTimer = setTimeout(() => canvas.classList.remove('settle'), 260);
   };
-  const els = new Map();               // id → { el, label, mons, pin }
+  const els = new Map();               // id → { el, mons, labels, decor, tag }
+  const seamPool = [];
 
   const toScreen = (x, y) => ({ x: tf.ox + x * tf.s, y: tf.oy + y * tf.s });
+  const isSeparate = (d) => d.mons.length > 1 && separate.has(d.id);
 
   function fit() {
     const { width: cw, height: ch } = wrap.getBoundingClientRect();
@@ -137,9 +174,9 @@ export function mountDesk(root) {
     const minX = Math.min(...list.map((d) => d.x)), minY = Math.min(...list.map((d) => d.y));
     const maxX = Math.max(...list.map((d) => d.x + d.w)), maxY = Math.max(...list.map((d) => d.y + d.h));
     const w = (maxX - minX) * (1 + MARGIN), hh = (maxY - minY) * (1 + MARGIN);
-    const s = Math.min(cw / w, (ch - 40) / hh, 0.3);
+    const s = Math.min(cw / w, (ch - 60) / hh, 0.3);
     fitScale = s;
-    tf = { s, ox: (cw - (maxX - minX) * s) / 2 - minX * s, oy: (ch - (maxY - minY) * s) / 2 - minY * s - 14 + (store.state?.peers.length ? 0 : 150) };
+    tf = { s, ox: (cw - (maxX - minX) * s) / 2 - minX * s, oy: (ch - (maxY - minY) * s) / 2 - minY * s - 6 + (store.state?.peers.length ? 0 : 150) };
   }
 
   // The view only re-fits on its own when a computer would be completely out of sight;
@@ -153,24 +190,63 @@ export function mountDesk(root) {
     });
   }
 
+  const placeWorld = () => { world.style.transform = `translate3d(${tf.ox}px, ${tf.oy}px, 0)`; };
+
   function place() {
+    const s = tf.s;
+    placeWorld();
     for (const d of list) {
       const rec = els.get(d.id);
       if (!rec) continue;
-      const p = toScreen(d.x, d.y);
-      Object.assign(rec.el.style, { left: `${p.x}px`, top: `${p.y}px`, width: `${d.w * tf.s}px`, height: `${d.h * tf.s}px` });
+      Object.assign(rec.el.style, { left: `${d.x * s}px`, top: `${d.y * s}px`, width: `${d.w * s}px`, height: `${d.h * s}px` });
       d.mons.forEach((m, i) => Object.assign(rec.mons[i].style, {
-        left: `${m.x * tf.s}px`, top: `${m.y * tf.s}px`, width: `${m.w * tf.s - 3}px`, height: `${m.h * tf.s - 3}px`,
+        left: `${m.x * s}px`, top: `${m.y * s}px`, width: `${m.w * s - 3}px`, height: `${m.h * s - 3}px`,
       }));
+      for (const { el, i, kind } of rec.decor) {
+        const m = d.mons[i];
+        if (kind === 'deck') {
+          const extra = m.w * s * 0.07;
+          Object.assign(el.style, { left: `${m.x * s - extra}px`, top: `${(m.y + m.h) * s - 2}px`, width: `${m.w * s - 3 + extra * 2}px`, height: `${Math.max(5, m.w * s * 0.045)}px` });
+        } else {
+          const neck = Math.max(4, m.h * s * 0.07);
+          Object.assign(el.style, { left: `${(m.x + m.w / 2) * s - 1.5}px`, top: `${(m.y + m.h) * s - 3}px` });
+          el.style.setProperty('--neck', `${neck}px`);
+          el.style.setProperty('--foot', `${Math.min(m.w * s * 0.32, 140)}px`);
+        }
+      }
     }
-    for (const el of canvas.querySelectorAll('.seam')) el.remove();
+    let n = 0;
     for (const sm of seams(list)) {
-      const p = toScreen(sm.x, sm.y);
-      canvas.append(h('i', { class: 'seam', style: {
-        left: `${p.x - (sm.w === 0 ? 1.5 : 0)}px`, top: `${p.y - (sm.h === 0 ? 1.5 : 0)}px`,
-        width: `${sm.w === 0 ? 3 : sm.w * tf.s}px`, height: `${sm.h === 0 ? 3 : sm.h * tf.s}px`,
-      } }));
+      let el = seamPool[n];
+      if (!el) { el = h('i', { class: 'seam' }); seamPool.push(el); world.append(el); }
+      el.style.display = '';
+      Object.assign(el.style, {
+        left: `${sm.x * s - (sm.w === 0 ? 1.5 : 0)}px`, top: `${sm.y * s - (sm.h === 0 ? 1.5 : 0)}px`,
+        width: `${sm.w === 0 ? 3 : sm.w * s}px`, height: `${sm.h === 0 ? 3 : sm.h * s}px`,
+      });
+      n++;
     }
+    for (; n < seamPool.length; n++) seamPool[n].style.display = 'none';
+    placeGroupButton();
+  }
+
+  // Under the selected multi-screen computer: group or ungroup its screens.
+  function placeGroupButton() {
+    const d = list.find((x) => x.id === store.selectedId);
+    if (!d || d.mons.length < 2 || dragging) { groupBtn.style.display = 'none'; return; }
+    groupBtn.style.display = '';
+    clear(groupBtn).append(icon(isSeparate(d) ? 'group' : 'ungroup'), isSeparate(d) ? 'Group screens' : 'Ungroup screens');
+    groupBtn.title = isSeparate(d) ? 'Move these screens together again' : 'Move each screen on its own';
+    const bottom = Math.max(...d.mons.map((m, i) => m.y + m.h + (standsOn(d, i) ? m.h * 0.1 : 0)));
+    Object.assign(groupBtn.style, { left: `${(d.x + d.w / 2) * tf.s}px`, top: `${(d.y + bottom) * tf.s + 14}px` });
+  }
+
+  function toggleGroup(id) {
+    const d = list.find((x) => x.id === id);
+    if (!d) return;
+    if (separate.has(id)) separate.delete(id); else separate.add(id);
+    saveSeparate();
+    paint(store.state); place(); renderInspector(store.state);
   }
 
   function statusText(d) {
@@ -182,22 +258,31 @@ export function mountDesk(root) {
   }
 
   function build() {
-    clear(canvas); els.clear();
+    for (const rec of els.values()) rec.el.remove();
+    els.clear();
     for (const d of list) {
-      const own = d.self && d.mons.length > 1;
-      const mons = d.mons.map((_, i) => h('div', {
-        class: own ? 'mon own' : 'mon',
-        onpointerdown: own ? (e) => { if (e.button === 0 && !e.shiftKey) { e.stopPropagation(); startMonitorDrag(e, d, i); } } : null,
+      const builtin = builtinIndex(d);
+      const mons = d.mons.map((m, i) => h('div', {
+        class: `mon${i === builtin ? ' builtin' : ''}`,
+        onpointerdown: (e) => {
+          if (e.button !== 0) return;
+          // Grouped: the whole computer moves. Ungrouped: just this screen. Shift does the other one.
+          if (isSeparate(d) !== e.shiftKey && d.mons.length > 1) { e.stopPropagation(); startMonitorDrag(e, d, i); }
+        },
       }));
-      const label = h('div', { class: 'info' });
-      mons[0]?.append(label);
-      const pin = h('i', { class: 'cursor-pin' });
+      const labels = mons.map((mon) => { const l = h('div', { class: 'info' }); mon.append(l); return l; });
+      const decor = [];
+      d.mons.forEach((_, i) => {
+        if (i === builtin) decor.push({ el: h('i', { class: 'deck' }), i, kind: 'deck' });
+        else if (standsOn(d, i) && d.dev.model?.kind !== 'imac') decor.push({ el: h('i', { class: 'stand' }), i, kind: 'stand' });
+      });
+      const tag = h('div', { class: 'here-tag' }, icon('pointer'), 'Cursor');
       const el = h('div', {
         class: 'device', tabindex: 0, role: 'button', 'aria-label': `${d.dev.name}, ${osName(d.dev.os)}`,
         onpointerdown: (e) => startDrag(e, d), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') select(d.id); },
-      }, mons, pin);
-      canvas.append(el);
-      els.set(d.id, { el, label, mons, pin });
+      }, decor.map((x) => x.el), mons, tag);
+      world.insertBefore(el, groupBtn);
+      els.set(d.id, { el, mons, labels, decor, tag });
     }
   }
 
@@ -207,18 +292,26 @@ export function mountDesk(root) {
       if (!rec) continue;
       const active = state.active_device_id === d.id && state.sharing_enabled;
       const offline = !d.self && d.dev.connection !== 'connected';
-      rec.el.className = `device ${d.dev.os === 'macos' ? 'mac' : 'win'}${active ? ' active' : ''}${offline ? ' offline' : ''}${store.selectedId === d.id ? ' selected' : ''}${dragging?.d === d ? ' dragging' : ''}`;
+      rec.el.className = `device ${d.dev.os === 'macos' ? 'mac' : 'win'}${active ? ' active' : ''}${offline ? ' offline' : ''}${store.selectedId === d.id ? ' selected' : ''}${dragging?.d === d ? ' dragging' : ''}${isSeparate(d) ? ' separate' : ''}`;
       const st = statusText(d);
-      clear(rec.label).append(osIcon(d.dev.os, 'glyph'), h('div', { class: 'nm' }, d.dev.name), h('div', { class: 'st' }, h('i', { class: `dot ${st.dot}` }), st.text));
-      rec.pin.style.display = active ? '' : 'none';
+      const many = d.mons.length > 1;
+      rec.labels.forEach((label, i) => {
+        const m = d.mons[i];
+        clear(label).append(
+          osIcon(d.dev.os, 'glyph'),
+          h('div', { class: 'nm' }, h('i', { class: `dot ${st.dot}` }), d.dev.name),
+          h('div', { class: 'sub' }, many ? `Screen ${i + 1} · ${pixels(d, m)}` : pixels(d, m)));
+      });
+      rec.tag.style.display = active ? '' : 'none';
       if (active) {
-        const m = d.mons.find((x) => x.primary) ?? d.mons[0];
-        Object.assign(rec.pin.style, { left: `${(m.x + m.w) * tf.s - 30}px`, top: `${m.y * tf.s + 14}px` });
+        // In the top-left corner of the topmost screen, clear of the labels in the middle.
+        const top = d.mons.reduce((a, b) => (b.y < a.y ? b : a));
+        Object.assign(rec.tag.style, { left: `${top.x * tf.s}px`, top: `${top.y * tf.s}px` });
       }
     }
   }
 
-  function select(id) { store.selectedId = id; paint(store.state); renderInspector(store.state); }
+  function select(id) { store.selectedId = id; paint(store.state); placeGroupButton(); renderInspector(store.state); }
 
   function startDrag(e, d) {
     if (e.button !== 0) return;
@@ -227,7 +320,7 @@ export function mountDesk(root) {
     el.setPointerCapture(e.pointerId);
     const start = { px: e.clientX, py: e.clientY, x: d.x, y: d.y };
     dragging = { d, moved: false };
-    paint(store.state);
+    paint(store.state); placeGroupButton();
     const others = list.filter((o) => o !== d);
     const move = (ev) => {
       const dx = (ev.clientX - start.px) / tf.s, dy = (ev.clientY - start.py) / tf.s;
@@ -238,7 +331,7 @@ export function mountDesk(root) {
     const up = async () => {
       el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
       const moved = dragging.moved; dragging = null;
-      paint(store.state);
+      paint(store.state); placeGroupButton();
       if (!moved) return;
       const devices = list.map((x) => ({ device_id: x.id, x: Math.round(x.x), y: Math.round(x.y) }));
       store.state.layout.devices = devices;
@@ -249,8 +342,8 @@ export function mountDesk(root) {
     el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
   }
 
-  // Move one of this computer's screens on its own. The engine stores the arrangement, reports the arranged screens
-  // to the other computers and keeps the real screens in sync, so the cursor follows this arrangement.
+  // Move one screen on its own. On this computer the engine stores the arrangement; for another computer the
+  // arrangement is sent to it and it applies it the same way. Either way the cursor follows this arrangement.
   function startMonitorDrag(e, d, index) {
     select(d.id);
     const rec = els.get(d.id);
@@ -260,7 +353,7 @@ export function mountDesk(root) {
     const start = { px: e.clientX, py: e.clientY, x: m.x, y: m.y };
     dragging = { d, moved: false, monitor: index };
     monEl.classList.add('lifted');
-    paint(store.state);
+    paint(store.state); placeGroupButton();
     const others = [
       ...d.mons.filter((_, j) => j !== index).map((o) => ({ x: d.x + o.x, y: d.y + o.y, w: o.w, h: o.h })),
       ...list.filter((o) => o !== d).flatMap((o) => absMons(o)),
@@ -276,11 +369,18 @@ export function mountDesk(root) {
       monEl.removeEventListener('pointermove', move); monEl.removeEventListener('pointerup', up); monEl.removeEventListener('pointercancel', up);
       monEl.classList.remove('lifted');
       const moved = dragging.moved; dragging = null;
-      paint(store.state);
+      paint(store.state); placeGroupButton();
       if (!moved) return;
-      // Positions relative to this computer's current spot; the engine normalizes them and keeps everything in place.
+      // Positions relative to the computer's current spot; its engine normalizes them and keeps everything in place.
       const arrangement = d.mons.map((x) => ({ monitor_id: x.id, x: Math.round(x.x), y: Math.round(x.y) }));
-      try { await call('set_settings', { patch: { display: { arrangement } } }); } catch (err) { toast(err.message, 'error'); }
+      try {
+        if (d.self) await call('set_settings', { patch: { display: { arrangement } } });
+        else await call('peer.arrange', { device_id: d.id, arrangement });
+      } catch (err) {
+        toast(err.message, 'error');
+        devSig = ''; update(store.state); // put the screen back where it really is
+        return;
+      }
       settle(); place(); paint(store.state);
     };
     monEl.addEventListener('pointermove', move); monEl.addEventListener('pointerup', up); monEl.addEventListener('pointercancel', up);
@@ -290,52 +390,82 @@ export function mountDesk(root) {
     clear(inspector);
     const d = list.find((x) => x.id === store.selectedId);
     if (!d) {
-      inspector.append(h('p', { class: 'empty-inspector' }, 'Select a screen to see its details, or drag it to rearrange.'),
+      inspector.append(h('p', { class: 'empty-inspector' }, 'Select a computer to see its details, or drag it to rearrange.'),
         h('p', { class: 'empty-inspector' }, `${list.length} ${list.length === 1 ? 'computer' : 'computers'} on your desk.`));
       return;
     }
     const dev = d.dev;
     const st = statusText(d);
+    const tint = dev.os === 'macos' ? 'mac' : 'win';
+    const kind = dev.model?.kind ?? (dev.os === 'macos' ? 'laptop' : 'desktop');
     inspector.append(
-      h('h2', null, dev.name),
+      h('div', { class: `insp-head ${tint}` },
+        deviceArt(kind, 'art'),
+        h('div', { class: 'who' },
+          h('h2', null, dev.name),
+          h('div', { class: 'model' }, dev.model?.name ?? osName(dev.os)))),
       h('div', { class: 'meta' },
-        h('span', { class: `chip ${dev.os === 'macos' ? 'mac' : 'win'}` }, osIcon(dev.os), osName(dev.os)),
-        d.self ? h('span', { class: 'chip' }, 'This computer') : h('span', { class: `chip status ${dev.connection === 'connected' ? 'ok' : ''}` }, st.text)),
-      h('dl', { class: 'kv' },
-        h('dt', null, 'Screens'), h('dd', null, d.mons.map((m) => `${m.w}×${m.h}`).join(' + ') + (d.mons[0].scale > 1 ? (dev.os === 'macos' ? ' · Retina screen' : ` · ${Math.round(d.mons[0].scale * 100)}% scaling`) : '')),
-        dev.address ? [h('dt', null, 'Address'), h('dd', null, dev.address)] : null,
-        h('dt', null, 'Fingerprint'), h('dd', { class: 'fp' }, dev.fingerprint)),
+        h('span', { class: `chip ${tint}` }, osIcon(dev.os), dev.os === 'macos' ? 'macOS' : 'Windows'),
+        h('span', { class: `chip status ${d.self || dev.connection === 'connected' ? 'ok' : ''}` }, st.text)),
     );
+
+    // Screens: one short line each.
+    const builtin = builtinIndex(d);
+    inspector.append(h('div', { class: 'insp-section' },
+      h('div', { class: 'insp-title' }, d.mons.length === 1 ? 'Screen' : `${d.mons.length} screens`),
+      h('ul', { class: 'screens' }, d.mons.map((m, i) => h('li', null,
+        h('span', { class: 'n' }, String(i + 1)),
+        h('span', { class: 'px' }, pixels(d, m)),
+        i === builtin ? h('span', { class: 'tagline' }, 'Built-in') : (m.primary && d.mons.length > 1 ? h('span', { class: 'tagline' }, 'Main') : null))))));
+
     if (d.mons.length > 1) {
+      const sep = isSeparate(d);
       const system = dev.os === 'macos' ? 'macOS' : 'Windows';
       const custom = d.self && (state.settings?.display?.arrangement?.length ?? 0) > 0;
-      inspector.append(h('div', { class: 'note' },
-        d.self
-          ? h('p', null, `Drag a screen to place it on its own, for example the top monitor to the right of the bottom one. The cursor follows the arrangement you make here. Hold Shift and drag to move the whole computer.${custom ? '' : ` Right now the screens are arranged as in ${system} Display settings.`}`)
-          : h('p', null, `These ${d.mons.length} screens move together here. To arrange them one by one, open Glide on ${dev.name}.`),
-        d.self && custom
-          ? h('button', { class: 'btn sm', onclick: async () => {
-            try { await call('set_settings', { patch: { display: { arrangement: [] } } }); toast(`Screens arranged as in ${system} again`); } catch (err) { toast(err.message, 'error'); }
-          } }, `Use the ${system} arrangement`)
-          : null));
+      const seg = h('div', { class: 'seg' },
+        h('button', { 'aria-pressed': String(!sep), onclick: () => sep && toggleGroup(d.id) }, 'Together'),
+        h('button', { 'aria-pressed': String(sep), onclick: () => !sep && toggleGroup(d.id) }, 'One by one'));
+      inspector.append(h('div', { class: 'insp-section' },
+        h('div', { class: 'insp-title' }, 'Move screens'), seg,
+        h('p', { class: 'insp-help' }, sep
+          ? 'Drag any screen on its own, for example the top monitor to the right of the bottom one. The cursor follows what you arrange here.'
+          : 'Dragging moves the whole computer. Choose One by one to place each screen separately.'),
+        custom ? h('button', { class: 'btn sm quiet', onclick: async () => {
+          try { await call('set_settings', { patch: { display: { arrangement: [] } } }); toast(`Screens arranged as in ${system} again`); } catch (err) { toast(err.message, 'error'); }
+        } }, `Use the ${system} arrangement`) : null));
     }
+
     const stack = h('div', { class: 'stack' });
     if (!d.self) {
+      if (dev.connection !== 'connected') {
+        if (dev.wake_mac) {
+          stack.append(h('button', { class: 'btn primary', onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            try { await call('peer.wake', { device_id: d.id }); toast(`Waking ${dev.name}…`); } catch (err) { toast(err.message, 'error'); }
+          } }, icon('power'), `Wake ${dev.name}`));
+        } else {
+          stack.append(h('p', { class: 'insp-help' }, `Glide learns how to wake ${dev.name} the next time both are connected.${dev.os === 'macos' ? ' On that Mac, turn on Wake for network access in Energy settings.' : ''}`));
+        }
+      }
       const cb = h('input', { type: 'checkbox', onchange: async (e) => {
         try { await call('peer.configure', { device_id: d.id, clipboard_enabled: e.target.checked }); } catch (err) { toast(err.message, 'error'); e.target.checked = !e.target.checked; }
       } });
       cb.checked = !!dev.clipboard_enabled;
-      stack.append(
-        h('label', { class: 'switch' }, cb, h('span', { class: 'track' }), h('span', { class: 'lbl' }, 'Share clipboard with this computer')),
-        h('button', { class: 'btn', onclick: () => call('return_home').catch(() => {}) }, icon('home'), 'Bring cursor back here'),
-        h('button', { class: 'btn danger', onclick: async () => {
-          const yes = await confirmModal({ title: `Unpair ${dev.name}?`, body: 'It will stop receiving your keyboard, mouse and clipboard, and must be paired again with a new code.', confirm: 'Unpair', danger: true });
-          if (!yes) return;
-          try { await call('peer.unpair', { device_id: d.id }); store.selectedId = null; toast(`${dev.name} unpaired`); } catch (err) { toast(err.message, 'error'); }
-        } }, 'Unpair this computer'),
-      );
+      stack.append(h('label', { class: 'switch' }, cb, h('span', { class: 'track' }), h('span', { class: 'lbl' }, 'Share clipboard')));
+      if (state.active_device_id === d.id) stack.append(h('button', { class: 'btn', onclick: () => call('return_home').catch(() => {}) }, icon('home'), 'Bring cursor back here'));
     }
     inspector.append(stack);
+
+    const facts = h('dl', { class: 'kv' },
+      dev.address ? [h('dt', null, 'Address'), h('dd', null, dev.address)] : null,
+      (dev.app_version ?? dev.version) ? [h('dt', null, 'Glide'), h('dd', null, dev.app_version ?? dev.version)] : null,
+      h('dt', null, 'Fingerprint'), h('dd', { class: 'fp' }, dev.fingerprint));
+    inspector.append(h('details', { class: 'more' }, h('summary', null, 'More details'), facts,
+      d.self ? null : h('button', { class: 'btn sm danger', onclick: async () => {
+        const yes = await confirmModal({ title: `Unpair ${dev.name}?`, body: 'It will stop receiving your keyboard, mouse and clipboard, and must be paired again with a new code.', confirm: 'Unpair', danger: true });
+        if (!yes) return;
+        try { await call('peer.unpair', { device_id: d.id }); store.selectedId = null; toast(`${dev.name} unpaired`); } catch (err) { toast(err.message, 'error'); }
+      } }, 'Unpair this computer')));
   }
 
   // Draw the cursor's journey between screens.
@@ -356,7 +486,7 @@ export function mountDesk(root) {
 
   // Drag empty space to look around. A click on empty space (no drag) clears the selection.
   canvas.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || e.target.closest('.device')) return;
+    if (e.button !== 0 || e.target.closest('.device, .group-toggle')) return;
     canvas.setPointerCapture(e.pointerId);
     panning = { px: e.clientX, py: e.clientY, ox: tf.ox, oy: tf.oy, moved: false };
     wrap.classList.add('panning');
@@ -366,7 +496,7 @@ export function mountDesk(root) {
     const dx = e.clientX - panning.px, dy = e.clientY - panning.py;
     if (Math.abs(dx) + Math.abs(dy) > 3) panning.moved = true;
     tf.ox = panning.ox + dx; tf.oy = panning.oy + dy;
-    schedule(false);
+    schedule(false, false);
   });
   const endPan = () => {
     if (!panning) return;
@@ -384,7 +514,7 @@ export function mountDesk(root) {
     const mouseWheel = e.deltaMode === 1 || (e.deltaX === 0 && e.wheelDeltaY !== 0 && e.wheelDeltaY % 120 === 0);
     if (!(e.ctrlKey || e.metaKey || mouseWheel)) {
       tf.ox -= e.deltaX; tf.oy -= e.deltaY;
-      schedule(false);
+      schedule(false, false);
       return;
     }
     const r = wrap.getBoundingClientRect();
@@ -420,7 +550,7 @@ export function mountDesk(root) {
   function update(state, kind) {
     if (dragging) return;
     // "Which computers and screens exist" rebuilds the canvas. "Where they sit" only moves them, keeping the view steady.
-    const devs = JSON.stringify([state.self.name, state.self.monitors, state.peers.map((p) => [p.device_id, p.name, p.os, p.monitors])]);
+    const devs = JSON.stringify([state.self.name, state.self.monitors, state.self.model, state.peers.map((p) => [p.device_id, p.name, p.os, p.monitors, p.last_monitors, p.model])]);
     const lay = JSON.stringify(state.layout);
     if (devs !== devSig) {
       devSig = devs; laySig = lay;
@@ -439,6 +569,9 @@ export function mountDesk(root) {
       settle();
       place();
     }
+    // Always show the newest status (online, latency, wake address...), even when nothing moved.
+    const fresh = new Map([[state.self.device_id, state.self], ...state.peers.map((p) => [p.device_id, p])]);
+    for (const d of list) d.dev = fresh.get(d.id) ?? d.dev;
     paint(state);
     paintWelcome(state);
     if (kind === 'stats') {

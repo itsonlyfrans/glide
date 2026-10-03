@@ -599,6 +599,9 @@ struct Context {
     mouse_valid: bool,
     clicks: [Click; 32],
     clock: Instant,
+    /// Smooths remote moves that arrive in bursts; `frames` is the display-rate timer that drives it while gliding.
+    pacer: MovePacer,
+    frames: Handle,
 }
 impl Context {
     fn refresh(&mut self) -> Result<Vec<Monitor>, BackendError> {
@@ -779,8 +782,62 @@ impl Context {
             .lock()
             .ok()
             .and_then(|mut slot| slot.take());
-        if let Some(event) = latest {
+        let Some(event) = latest else {
+            return;
+        };
+        if let InputEventKind::PointerMoved { position, .. } = event.kind {
+            match self.pacer.arrive(position, Instant::now()) {
+                Some(now) => {
+                    let _ = self.inject(InputEventKind::PointerMoved {
+                        position: now,
+                        delta_x: 0.0,
+                        delta_y: 0.0,
+                    });
+                }
+                None => self.run_frames(true),
+            }
+        } else {
             let _ = self.inject(event.kind);
+        }
+    }
+
+    /// One display frame while a burst of moves is being smoothed.
+    fn frame(&mut self) {
+        if let Some(next) = self.pacer.tick(Instant::now()) {
+            let _ = self.inject(InputEventKind::PointerMoved {
+                position: next,
+                delta_x: 0.0,
+                delta_y: 0.0,
+            });
+        }
+        if !self.pacer.pending() {
+            self.run_frames(false);
+        }
+    }
+
+    /// Before a click or key, put the cursor exactly where the other computer last aimed.
+    fn settle_moves(&mut self) {
+        if let Some(next) = self.pacer.flush() {
+            let _ = self.inject(InputEventKind::PointerMoved {
+                position: next,
+                delta_x: 0.0,
+                delta_y: 0.0,
+            });
+        }
+        self.run_frames(false);
+    }
+
+    fn run_frames(&mut self, on: bool) {
+        if self.frames.is_null() {
+            return;
+        }
+        // SAFETY: a clock read, and the frame timer lives until Sources drops, after which no callback can run.
+        unsafe {
+            let now = core_foundation::date::CFAbsoluteTimeGetCurrent();
+            CFRunLoopTimerSetNextFireDate(
+                self.frames.cast(),
+                if on { now + FRAME_SECONDS } else { now + 1.0e9 },
+            );
         }
     }
 
@@ -1310,13 +1367,24 @@ fn process_commands(context: &mut Context) {
                 continue; // moves are fire-and-forget: no reply is waiting for them
             }
             Command::Capture(sink) => context.capture(sink).map(|_| Reply::Unit),
-            Command::Mode(mode) => context.mode(mode).map(|_| Reply::Unit),
+            Command::Mode(mode) => {
+                context.pacer.reset();
+                context.run_frames(false);
+                context.mode(mode).map(|_| Reply::Unit)
+            }
             Command::Visibility(visible) => context
                 .cursor
                 .set_visible(visible, &context.displays[..context.count])
                 .map(|_| Reply::Unit),
-            Command::Inject(event) => context.inject(event.kind).map(|_| Reply::Unit),
-            Command::Release => context.release().map(|_| Reply::Unit),
+            Command::Inject(event) => {
+                context.settle_moves();
+                context.inject(event.kind).map(|_| Reply::Unit)
+            }
+            Command::Release => {
+                context.pacer.reset();
+                context.run_frames(false);
+                context.release().map(|_| Reply::Unit)
+            }
             Command::Monitors => context.refresh().map(Reply::Monitors),
             Command::Cursor => context.cursor_pos().map(Reply::Cursor),
             Command::Stop => {
@@ -1339,6 +1407,21 @@ extern "C" fn timer_callback(_: CFRunLoopTimerRef, info: Handle) {
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| safety_tick(context))).is_err() {
         context.fallback(CaptureFallback::UnsupportedEvent);
         stop_current_loop();
+    }
+}
+
+/// 240 Hz: at least two steps per frame on a 120 Hz ProMotion display.
+const FRAME_SECONDS: f64 = 1.0 / 240.0;
+
+extern "C" fn frame_callback(_: CFRunLoopTimerRef, info: Handle) {
+    if info.is_null() {
+        return;
+    }
+    // SAFETY: timer is invalidated before the stable boxed context goes away, owning thread only.
+    let context = unsafe { &mut *info.cast::<Context>() };
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| context.frame())).is_err() {
+        context.pacer.reset();
+        context.run_frames(false);
     }
 }
 
@@ -1396,6 +1479,7 @@ impl Drop for DisplayRegistration {
 struct Sources {
     command: Arc<Wake>,
     timer: OwnedCf,
+    frames: OwnedCf,
 }
 impl Drop for Sources {
     fn drop(&mut self) {
@@ -1403,6 +1487,7 @@ impl Drop for Sources {
         unsafe {
             CFRunLoopSourceInvalidate(self.command.source.as_ptr().cast());
             CFRunLoopTimerInvalidate(self.timer.raw().cast());
+            CFRunLoopTimerInvalidate(self.frames.raw().cast());
         }
     }
 }
@@ -1456,6 +1541,8 @@ fn run(
         mouse_valid: false,
         clicks: [Click::default(); 32],
         clock: Instant::now(),
+        pacer: MovePacer::new(),
+        frames: ptr::null_mut(),
     });
     let _ = context.refresh()?;
     let local = context.cursor_pos()?;
@@ -1503,7 +1590,34 @@ fn run(
         }
         .cast(),
     )?;
-    let sources = Sources { command, timer };
+    let mut frames_context = CFRunLoopTimerContext {
+        version: 0,
+        info,
+        retain: None,
+        release: None,
+        copyDescription: None,
+    };
+    // SAFETY: as above; the frame timer starts parked far in the future and runs only while moves are smoothed.
+    let frames = OwnedCf::new(
+        unsafe {
+            CFRunLoopTimerCreate(
+                ptr::null(),
+                core_foundation::date::CFAbsoluteTimeGetCurrent() + 1.0e9,
+                FRAME_SECONDS,
+                0,
+                0,
+                frame_callback,
+                &mut frames_context,
+            )
+        }
+        .cast(),
+    )?;
+    context.frames = frames.raw();
+    let sources = Sources {
+        command,
+        timer,
+        frames,
+    };
     // SAFETY: all source/timer references live, registration gets a retained stable Arc address.
     unsafe {
         CFRunLoopAddSource(
@@ -1514,6 +1628,11 @@ fn run(
         CFRunLoopAddTimer(
             CFRunLoopGetCurrent(),
             sources.timer.raw().cast(),
+            kCFRunLoopCommonModes,
+        );
+        CFRunLoopAddTimer(
+            CFRunLoopGetCurrent(),
+            sources.frames.raw().cast(),
             kCFRunLoopCommonModes,
         );
         if CGDisplayRegisterReconfigurationCallback(

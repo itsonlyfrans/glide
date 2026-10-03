@@ -1054,6 +1054,10 @@ fn mock_peer(discovered: &DiscoveredPeer) -> Peer {
             primary: true,
         }],
         clipboard_enabled: true,
+        wake_mac: None,
+        last_monitors: Vec::new(),
+        app_version: None,
+        model: None,
     }
 }
 

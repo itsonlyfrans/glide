@@ -44,12 +44,21 @@ ALPN `glide/1` (mutual TLS 1.3 over QUIC). Streams/datagrams:
 * **Control stream** (bidi, opened by the dialer, id 0): `Hello{proto_version, device_id, name, os, monitors[], app_version}`,
   `LayoutUpdate{version:(lamport,device_id), devices[]}` (last-writer-wins, rebroadcast on change),
   `Heartbeat{seq,ts}`/`HeartbeatAck` (also RTT), `Bye{reason}`, `Unpaired`, `TakeOver`, `Enter{pos, modifiers_down[]}`, `Leave`.
+  Since 0.2.2: `Details{model, kind, builtin_monitor}` (what the computer is, for its picture on the Desk) and
+  `Arrange{screens[]}` (arrange the receiver's own screens, chosen on another computer's Desk; applied exactly like a
+  local `set_settings` arrangement). Both are sent **only** to peers whose `Hello.app_version` is 0.2.2 or newer,
+  because older versions drop the connection on an unknown message.
+* **Wake-on-LAN**: while connected, each side reads the other's hardware address from its own ARP table (no extra
+  traffic) and stores it with the pairing. Pushing the cursor toward a sleeping computer's place on the desk, or
+  `peer.wake`, broadcasts the standard magic packet (ports 9 and 7), at most once a minute per computer.
 * **Input reliable stream** (uni, high priority): `Key{hid_usage, down}`, `Button{button, down}`,
   `Wheel{dx,dy}` (hi-res units, carry both vertical+horizontal, `precise` flag for trackpad), `ModifierSync`.
   Each carries `seq`. On `Enter`/`Leave`, brain sends modifier state so no key is ever stuck; on `Leave`/disconnect
   target **releases every key/button it injected** (stuck-key guard).
 * **Mouse-move datagrams**: `Move{seq, x, y}` absolute in target logical coords, latest-wins, stale seq dropped.
-  Coalesce to the display refresh/1 kHz max; never queue.
+  Coalesce to the display refresh/1 kHz max; never queue. On macOS the receiver paces moves that arrive in bursts
+  (typical on Wi-Fi) over the following 240 Hz frames, never longer than 16 ms; steady arrivals post immediately and a
+  click first snaps to the newest position.
 * **Clipboard streams** (see §4) and **file transfer streams** (one uni stream per chunk group) — never share a
   stream with input so large transfers cannot add input latency. Input streams get QUIC priority > clipboard > files;
   congestion control: BBR or Cubic with pacing off for datagrams if the lib allows.

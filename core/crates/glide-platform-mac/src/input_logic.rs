@@ -362,6 +362,119 @@ pub(crate) fn is_release(kind: InputEventKind) -> bool {
     )
 }
 
+/// Smooths remote cursor moves that arrive in clumps. Wi-Fi often delivers a stream of small mouse packets in bursts
+/// every 10-30 ms; posting each burst as one jump makes a 120 Hz screen look like it runs at 40 Hz. When moves arrive
+/// steadily they are posted at once, exactly as before. When they arrive in bursts, the cursor glides at a steady speed
+/// to the newest position over the following display frames, so motion stays fluid at the cost of a few milliseconds.
+pub(crate) struct MovePacer {
+    target: Option<Point>,
+    shown: Option<Point>,
+    last_arrival: Option<std::time::Instant>,
+    /// The glide in progress: where it started, when, and how long it takes (seconds).
+    from: Point,
+    started: Option<std::time::Instant>,
+    length: f64,
+    /// The largest recent gap between arrivals, slowly forgotten (seconds).
+    burst_gap: f64,
+}
+
+/// Moves that keep arriving at least this often need no smoothing (seconds).
+const STEADY_GAP: f64 = 0.006;
+/// Never glide for longer than this, so the cursor can not feel heavy (seconds).
+const MAX_GLIDE: f64 = 0.016;
+/// After a pause this long, the next move is a fresh start and is posted at once (seconds).
+const IDLE_GAP: f64 = 0.12;
+
+impl MovePacer {
+    pub(crate) fn new() -> Self {
+        Self {
+            target: None,
+            shown: None,
+            last_arrival: None,
+            from: Point { x: 0.0, y: 0.0 },
+            started: None,
+            length: 0.0,
+            burst_gap: 0.0,
+        }
+    }
+
+    /// A new position arrived. Returns the point to post right away, or `None` when frame ticks will glide to it.
+    pub(crate) fn arrive(&mut self, p: Point, now: std::time::Instant) -> Option<Point> {
+        let gap = self
+            .last_arrival
+            .map(|last| now.saturating_duration_since(last).as_secs_f64());
+        self.last_arrival = Some(now);
+        self.target = Some(p);
+        let Some(gap) = gap.filter(|gap| *gap < IDLE_GAP) else {
+            self.burst_gap = 0.0;
+            return self.jump(p);
+        };
+        // Remember the biggest recent gap; forget it over about a quarter of a second of steady arrivals.
+        self.burst_gap = gap.max(self.burst_gap * (-gap / 0.25).exp());
+        let Some(shown) = self.shown else {
+            return self.jump(p);
+        };
+        if self.burst_gap <= STEADY_GAP {
+            return self.jump(p);
+        }
+        self.from = shown;
+        self.started = Some(now);
+        self.length = (self.burst_gap * 0.75).min(MAX_GLIDE);
+        None
+    }
+
+    fn jump(&mut self, p: Point) -> Option<Point> {
+        self.shown = Some(p);
+        self.started = None;
+        Some(p)
+    }
+
+    /// Whether display-frame ticks are still needed.
+    pub(crate) fn pending(&self) -> bool {
+        matches!((self.shown, self.target), (Some(a), Some(b)) if a != b)
+    }
+
+    /// One display frame: the next point to post, if the cursor is still on its way.
+    pub(crate) fn tick(&mut self, now: std::time::Instant) -> Option<Point> {
+        let target = self.target?;
+        if !self.pending() {
+            return None;
+        }
+        let Some(started) = self.started else {
+            return self.jump(target);
+        };
+        let progress = if self.length <= 0.0 {
+            1.0
+        } else {
+            (now.saturating_duration_since(started).as_secs_f64() / self.length).min(1.0)
+        };
+        if progress >= 1.0 {
+            return self.jump(target);
+        }
+        let next = Point {
+            x: self.from.x + (target.x - self.from.x) * progress,
+            y: self.from.y + (target.y - self.from.y) * progress,
+        };
+        self.shown = Some(next);
+        Some(next)
+    }
+
+    /// Jump to the newest position now (before a click, so it lands exactly where the other computer aimed).
+    pub(crate) fn flush(&mut self) -> Option<Point> {
+        let target = self.target?;
+        if !self.pending() {
+            return None;
+        }
+        self.jump(target)
+    }
+
+    /// Forget everything (control left this computer).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,5 +670,77 @@ mod tests {
             dy: 1.0,
             precise: false
         }));
+    }
+
+    // Bug: on a MacBook over Wi-Fi the remote cursor looked like it ran at a low frame rate, because moves that
+    // arrived in bursts were posted as single jumps.
+    #[test]
+    fn bursty_moves_are_eased_over_display_frames_and_steady_moves_post_at_once() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let at = |ms: f64| start + Duration::from_secs_f64(ms / 1000.0);
+        let p = |x: f64| Point { x, y: 100.0 };
+
+        // Steady 1 ms arrivals (a wired network): every move is posted immediately.
+        let mut pacer = MovePacer::new();
+        for i in 0..50 {
+            let x = f64::from(i);
+            assert_eq!(pacer.arrive(p(x), at(x)), Some(p(x)));
+        }
+        assert!(!pacer.pending());
+
+        // Bursts every 24 ms, each jumping 48 px: after the first burst, jumps are eased over several frames.
+        let mut pacer = MovePacer::new();
+        let mut eased = Vec::new();
+        for burst in 0..6 {
+            let t = f64::from(burst) * 24.0;
+            let x = f64::from(burst) * 48.0;
+            if pacer.arrive(p(x), at(t)).is_none() {
+                for frame in 1..=5 {
+                    if let Some(step) = pacer.tick(at(t + f64::from(frame) * 4.0)) {
+                        eased.push(step.x);
+                    }
+                }
+            }
+        }
+        assert!(
+            eased.len() >= 10,
+            "the cursor moves on many frames between bursts: {eased:?}"
+        );
+        assert!(
+            eased.windows(2).all(|w| w[1] >= w[0]),
+            "always moving forward: {eased:?}"
+        );
+
+        // A click snaps to the exact newest position first.
+        pacer.arrive(p(1000.0), at(150.0));
+        assert_eq!(pacer.flush(), Some(p(1000.0)));
+        assert!(!pacer.pending());
+
+        // After a pause the next move is a fresh start and is posted at once.
+        assert_eq!(pacer.arrive(p(5.0), at(600.0)), Some(p(5.0)));
+    }
+
+    // The easing must never make the cursor trail far behind: it catches up within a few frames.
+    #[test]
+    fn eased_cursor_catches_up_within_a_few_frames() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let at = |ms: f64| start + Duration::from_secs_f64(ms / 1000.0);
+        let mut pacer = MovePacer::new();
+        pacer.arrive(Point { x: 0.0, y: 0.0 }, at(0.0));
+        pacer.arrive(Point { x: 1.0, y: 0.0 }, at(30.0));
+        assert!(pacer.arrive(Point { x: 200.0, y: 0.0 }, at(31.0)).is_none());
+        let mut last = None;
+        for frame in 1..=12 {
+            if let Some(step) = pacer.tick(at(31.0 + f64::from(frame) * 4.17)) {
+                last = Some(step);
+            }
+        }
+        assert_eq!(
+            last,
+            Some(Point { x: 200.0, y: 0.0 }),
+            "arrived within 50 ms"
+        );
     }
 }

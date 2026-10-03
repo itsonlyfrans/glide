@@ -16,14 +16,17 @@ Windows and macOS in any combination, over your own network, with everything enc
 ## Features
 
 - **Move the cursor across.** Arrange your computers on the Desk the way they sit on your desk; where two screens
-  touch, the cursor crosses. Multi-monitor setups and mixed display scaling are handled, and you can arrange each
-  computer's screens however you like.
+  touch, the cursor crosses. Multi-monitor setups and mixed display scaling are handled. Ungroup a computer's screens
+  to place each one on its own, from whichever computer you are sitting at.
+- **Wakes the other computer.** Push the cursor toward a computer that has gone to sleep and Glide wakes it over the
+  network (Wake-on-LAN), or press *Wake* on the Desk.
 - **Shared clipboard.** Text, rich text, images and files. Large files copy in the background and are ready to paste
   when they arrive; anything a password manager marks as sensitive is never shared.
 - **Shortcuts that feel native.** Ctrl+C on a Windows keyboard is Cmd+C on the Mac and the other way round; Alt+Tab
   and Cmd+Tab switch apps on whichever computer you are controlling. Back/Forward mouse buttons work too.
-- **Feels like a local mouse.** Pointer speed and acceleration settings, latest-position-wins cursor movement and
-  high-priority input threads, so a busy computer stays smooth.
+- **Feels like a local mouse.** Pointer speed and acceleration settings, latest-position-wins cursor movement,
+  high-priority input threads, and frame-paced smoothing when Wi-Fi delivers movement in bursts, so a 120 Hz screen
+  stays fluid and a busy computer stays smooth.
 - **Always ready, tiny.** The engine runs quietly in the background (about 15 MB of memory). The whole app is about
   15 MB installed. It reconnects by itself and wakes a sleeping screen when the cursor arrives.
 - **Updates itself.** Signed updates install with one click.

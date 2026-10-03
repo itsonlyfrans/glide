@@ -8,12 +8,14 @@ pub mod control;
 pub mod control_unix;
 #[cfg(windows)]
 pub mod control_win;
+pub mod device;
 pub mod ipc;
 pub mod keyboard;
 pub mod layout;
 pub mod logging;
 mod state;
 pub mod tray;
+pub mod wake;
 pub mod wheel;
 
 pub use state::Core;
