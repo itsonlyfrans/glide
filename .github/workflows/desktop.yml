@@ -1,6 +1,7 @@
 name: Glide desktop
 # Builds the Tauri app with its engine for Windows (x64) and Apple Silicon Macs.
-#  - Manual run: builds both and uploads the installers as workflow artifacts.
+#  - Manual run, or a push to main that touches the app or engine: builds both (not notarized) and uploads the
+#    installers as workflow artifacts. Main builds also keep the Rust build cache warm for releases.
 #  - Tag push vX.Y.Z: also publishes a GitHub release with the installers, the signed update files and latest.json,
 #    which installed copies of Glide check for updates.
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (update signing; required), and for signed + notarized Mac builds CSC_LINK
@@ -8,6 +9,8 @@ name: Glide desktop
 on:
   workflow_dispatch:
   push:
+    branches: [main]
+    paths: ["core/**", "desktop/**", ".github/workflows/desktop.yml"]
     tags: ["v*"]
 permissions:
   contents: write
@@ -32,7 +35,22 @@ jobs:
           cache-dependency-path: desktop/pnpm-lock.yaml
       - name: Latest stable Rust
         shell: bash
-        run: rustup update stable && rustup default stable && rustc --version
+        run: |
+          rustup update stable && rustup default stable && rustc --version
+          echo "RUSTC_VERSION=$(rustc -V | cut -d' ' -f2)" >> "$GITHUB_ENV"
+      # Compiled dependencies survive between runs (tag builds can only use caches saved on main).
+      - name: Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ${{ runner.temp }}/glide-target
+            ${{ runner.temp }}/desktop-target
+          key: desktop-${{ matrix.triple }}-rust${{ env.RUSTC_VERSION }}-${{ hashFiles('core/Cargo.lock', 'desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            desktop-${{ matrix.triple }}-rust${{ env.RUSTC_VERSION }}-
       - name: Build and stage the engine
         shell: bash
         env:
@@ -63,6 +81,10 @@ jobs:
           IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
           echo "Signing as: $IDENTITY"
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+      - name: Installer window background (macOS)
+        if: runner.os == 'macOS'
+        # One TIFF holding the normal and Retina pictures, so the install window is sharp on every Mac.
+        run: tiffutil -cathidpicheck desktop/src-tauri/dmg/background.png desktop/src-tauri/dmg/background@2x.png -out desktop/src-tauri/dmg/background.tiff
       - name: Build the app
         shell: bash
         working-directory: desktop
@@ -74,8 +96,8 @@ jobs:
           APPLE_TEAM_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/desktop-target
         run: |
-          # Notarize only when the Apple details are present.
-          [ -z "$APPLE_ID" ] && unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          # Notarize only release builds, and only when the Apple details are present.
+          if [ -z "$APPLE_ID" ] || [ "$GITHUB_REF_TYPE" != "tag" ]; then unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; fi
           pnpm exec tauri build --target ${{ matrix.triple }}
       - name: Collect installers
         shell: bash

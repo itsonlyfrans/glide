@@ -20,6 +20,20 @@ jobs:
       - name: Build outside the repository
         shell: bash
         run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/glide-target" >> "$GITHUB_ENV"
+      - name: Rust version
+        shell: bash
+        run: echo "RUSTC_VERSION=$(rustc -V | cut -d' ' -f2)" >> "$GITHUB_ENV"
+      - name: Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ${{ runner.temp }}/glide-target
+          key: core-${{ matrix.os }}-rust${{ env.RUSTC_VERSION }}-${{ hashFiles('core/Cargo.lock') }}
+          restore-keys: |
+            core-${{ matrix.os }}-rust${{ env.RUSTC_VERSION }}-
       - run: rustup component add rustfmt clippy
       - run: cargo fetch --locked
       - run: cargo fmt --check

@@ -12,3 +12,5 @@ Glide_user_changelog_media/
 .user-changelog.lock
 .task/
 .shots/
+# made on the Mac build machine from background.png + background@2x.png
+desktop/src-tauri/dmg/background.tiff

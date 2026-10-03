@@ -1,0 +1,55 @@
+<!doctype html>
+<!-- Source of the Mac installer window background (background.png / background@2x.png, 660 x 400 points).
+     Render with headless Edge or Chrome at 660x400, device scale 1 and 2. Finder places the Glide icon at (180, 180)
+     and the Applications folder at (480, 180) — see tauri.macos.conf.json. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Glide installer background</title>
+<style>
+  @font-face { font-family: Bricolage; src: url("../../ui/fonts/bricolage-grotesque-latin-wght-normal.woff2") format("woff2"); font-weight: 200 800; }
+  @font-face { font-family: Instrument; src: url("../../ui/fonts/instrument-sans-latin-wght-normal.woff2") format("woff2"); font-weight: 400 700; }
+  html, body { margin: 0; width: 660px; height: 400px; overflow: hidden; }
+  body { position: relative; font-family: Instrument, system-ui, sans-serif; color: #1b1f33;
+    background: radial-gradient(520px 260px at 50% 46%, #ffffff, transparent 75%), linear-gradient(180deg, #f6f7fc, #e9ecf8); }
+  .dots { position: absolute; inset: 0; background-image: radial-gradient(rgba(27, 31, 51, .07) 1.1px, transparent 1.3px); background-size: 22px 22px; }
+  .title { position: absolute; left: 0; right: 0; top: 24px; display: flex; justify-content: center; align-items: center; gap: 10px;
+    font: 650 19px/1 Bricolage, sans-serif; letter-spacing: -0.01em; }
+  .title svg { width: 26px; height: 26px; }
+  /* Two screens on a desk: Glide on the left one, Applications on the right one. */
+  .screen { position: absolute; top: 88px; width: 214px; height: 190px; border-radius: 14px; background: #fff; border: 3px solid;
+    box-shadow: 0 14px 30px rgba(27, 31, 51, .12), inset 0 0 0 6px #f3f5fb; }
+  .left { left: 73px; border-color: #5fb0ff; }
+  .right { left: 373px; border-color: #a98bff; }
+  .stand { position: absolute; top: 281px; width: 6px; height: 20px; border-radius: 0 0 3px 3px; }
+  .stand::after { content: ""; position: absolute; top: 20px; left: 50%; width: 76px; height: 5px; transform: translateX(-50%); border-radius: 4px; background: inherit; }
+  .stand.left { left: 177px; background: #9fcfff; border: 0; }
+  .stand.right { left: 477px; background: #cbbaff; border: 0; }
+  svg.trail { position: absolute; left: 0; top: 0; width: 660px; height: 400px; overflow: visible; }
+  .hint { position: absolute; left: 0; right: 0; top: 344px; text-align: center; font-size: 13.5px; color: #5c6584; }
+</style>
+</head>
+<body>
+  <div class="dots"></div>
+  <div class="title">
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <defs><linearGradient id="bf" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#5fb0ff"/><stop offset="1" stop-color="#a98bff"/></linearGradient></defs>
+      <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#bf)"/>
+      <path d="M13 27.5h10M9.5 34.5h12M14 41.5h8" stroke="#fff" stroke-opacity=".7" stroke-width="4" stroke-linecap="round"/>
+      <path d="M28 14v32l8-7.4 5.2 11.9 5.9-2.6-5.2-11.7h10.9z" fill="#fff" stroke="#1b1f33" stroke-opacity=".16" stroke-width="1" stroke-linejoin="round"/>
+    </svg>
+    Glide it onto Applications
+  </div>
+  <div class="screen left"></div>
+  <div class="screen right"></div>
+  <div class="stand left"></div>
+  <div class="stand right"></div>
+  <!-- The cursor's path from one screen to the other, like crossing a screen edge. -->
+  <svg class="trail" viewBox="0 0 660 400" aria-hidden="true">
+    <defs><linearGradient id="tg" x1="250" x2="420" y1="0" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#5fb0ff"/><stop offset="1" stop-color="#a98bff"/></linearGradient></defs>
+    <path d="M246 176 Q 330 112 410 168" fill="none" stroke="url(#tg)" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="1 9"/>
+    <path d="M398 152 L414 171 L392 175" fill="none" stroke="#a98bff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <div class="hint">Like moving your cursor from one screen to the next.</div>
+</body>
+</html>
