@@ -236,6 +236,7 @@ impl Core {
             return Err(error(ErrorCode::InvalidParams, "invalid move"));
         }
         self.move_seq = Some(movement.seq);
+        self.diag.received(Instant::now());
         let position = Point {
             x: movement.x,
             y: movement.y,
@@ -489,6 +490,7 @@ impl Core {
                 delta_x,
                 delta_y,
             } if self.state.sharing_enabled => {
+                let handling = Instant::now();
                 let position = crate::arrangement::to_arranged(
                     &self.native_monitors,
                     &self.state.self_info.monitors,
@@ -531,6 +533,7 @@ impl Core {
                                 },
                             ));
                             self.flush_pending_move().await?;
+                            self.diag.captured(handling);
                         }
                         Err(_) => self.end_forwarding("link_lost").await?,
                     }
@@ -733,8 +736,11 @@ impl Core {
             return self.end_forwarding("link_lost").await;
         }
         match self.link.send_datagram(target, movement) {
-            Ok(()) => self.pending_move = None,
-            Err(glide_net::LinkError::Busy) => {}
+            Ok(()) => {
+                self.pending_move = None;
+                self.diag.sent();
+            }
+            Err(glide_net::LinkError::Busy) => self.diag.held_back(),
             Err(_) => {
                 self.pending_move = None;
                 self.end_forwarding("link_lost").await?;

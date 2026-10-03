@@ -19,7 +19,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 const MAGIC: i64 = 0x474c4944454d4143;
@@ -170,6 +170,16 @@ struct MoveSlot {
     queued: AtomicBool,
     /// Smooth bursts of moves (Settings: "Smooth cursor over Wi-Fi").
     smooth: AtomicBool,
+    /// For the cursor report: when the waiting move was first stored, and what was measured.
+    timing: Mutex<(Option<Instant>, glide_platform::MoveTimings)>,
+}
+
+/// Keep the newest few thousand samples for the cursor report.
+fn record(samples: &mut Vec<u32>, value: Duration) {
+    if samples.len() >= 6000 {
+        samples.drain(..1000);
+    }
+    samples.push(u32::try_from(value.as_micros()).unwrap_or(u32::MAX));
 }
 
 extern "C" {
@@ -261,6 +271,7 @@ impl MacInput {
             latest: Mutex::new(None),
             queued: AtomicBool::new(false),
             smooth: AtomicBool::new(true),
+            timing: Mutex::new((None, glide_platform::MoveTimings::default())),
         });
         let moves_thread = moves.clone();
         let thread = thread::Builder::new()
@@ -317,11 +328,20 @@ impl MacInput {
     /// Store the newest cursor position and make sure exactly one `Move` command is waiting. Never waits for the input
     /// thread: under load, older positions are overwritten instead of building a backlog.
     fn inject_move(&self, event: InputEvent) -> Result<(), BackendError> {
-        *self
+        let replaced = self
             .moves
             .latest
             .lock()
-            .map_err(|_| BackendError::StateUnavailable)? = Some(event);
+            .map_err(|_| BackendError::StateUnavailable)?
+            .replace(event)
+            .is_some();
+        if let Ok(mut timing) = self.moves.timing.lock() {
+            if replaced {
+                timing.1.replaced += 1;
+            } else {
+                timing.0 = Some(Instant::now());
+            }
+        }
         if !self.moves.queued.swap(true, Ordering::AcqRel) {
             if self.commands.try_send(Command::Move).is_err() {
                 self.moves.queued.store(false, Ordering::Release);
@@ -365,6 +385,11 @@ impl MacInput {
 impl InputBackend for MacInput {
     fn set_move_smoothing(&self, on: bool) {
         self.moves.smooth.store(on, Ordering::Release);
+    }
+
+    fn take_move_timings(&self) -> Option<glide_platform::MoveTimings> {
+        let mut timing = self.moves.timing.lock().ok()?;
+        Some(std::mem::take(&mut timing.1))
     }
 
     fn request_permissions(&self) -> Permissions {
@@ -792,6 +817,11 @@ impl Context {
         let Some(event) = latest else {
             return;
         };
+        if let Ok(mut timing) = self.moves.timing.lock() {
+            if let Some(stored) = timing.0.take() {
+                record(&mut timing.1.wait_us, stored.elapsed());
+            }
+        }
         if let InputEventKind::PointerMoved { position, .. } = event.kind {
             if !self.moves.smooth.load(Ordering::Acquire) {
                 self.pacer.reset();
@@ -1047,10 +1077,17 @@ impl Context {
         };
         // SAFETY: event is live and private, all flags derive from bounded tracked key state;
         // the magic is attached to every event, then Quartz posts at kCGHIDEventTap (0).
+        let posting = Instant::now();
         unsafe {
             CGEventSetFlags(event.raw(), key_flags(&next_keys, caps, hid));
             CGEventSetIntegerValueField(event.raw(), 42, MAGIC);
             CGEventPost(0, event.raw());
+        }
+        if matches!(kind, InputEventKind::PointerMoved { .. }) {
+            if let Ok(mut timing) = self.moves.timing.lock() {
+                timing.1.posted += 1;
+                record(&mut timing.1.post_us, posting.elapsed());
+            }
         }
         let posting_granted = permissions().injection == PermissionStatus::Granted;
         // Posting has no delivery result. If TCC changed during a release, conservatively

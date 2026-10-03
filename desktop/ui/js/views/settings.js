@@ -82,6 +82,26 @@ function presenceRow() {
   return box;
 }
 
+// Cursor report: where time goes between the mouse and the cursor on the other computer.
+async function openCursorReport() {
+  const pre = h('pre', { class: 'report' }, 'Measuring…');
+  const refresh = async () => {
+    try { pre.textContent = (await call('diag.cursor')).text; } catch (e) { pre.textContent = e.message ?? String(e); }
+  };
+  const close = () => scrim.remove();
+  const scrim = h('div', { class: 'scrim', onclick: (e) => { if (e.target === scrim) close(); } },
+    h('div', { class: 'modal wide', role: 'dialog', 'aria-label': 'Cursor report' },
+      h('h2', null, 'Cursor report'),
+      h('p', null, 'Move the cursor onto the other computer and keep it moving for about 10 seconds, then press Refresh. Do the same in Glide on the other computer, and send both reports.'),
+      pre,
+      h('div', { class: 'foot' },
+        h('button', { class: 'btn', onclick: refresh }, 'Refresh'),
+        h('button', { class: 'btn', onclick: async () => { try { await navigator.clipboard.writeText(pre.textContent); toast('Report copied'); } catch { toast('Could not copy.', 'error'); } } }, icon('copy'), 'Copy'),
+        h('button', { class: 'btn primary', onclick: close }, 'Done'))));
+  document.getElementById('modalRoot').append(scrim);
+  refresh();
+}
+
 const setting = (title, desc, control) => h('div', { class: 'setting' }, h('div', { class: 'grow' }, h('div', { class: 'title' }, title), desc ? h('div', { class: 'desc' }, desc) : null), control);
 
 export function mountSettings(root) {
@@ -188,7 +208,9 @@ export function mountSettings(root) {
       h('section', { class: 'section' },
         h('h2', null, 'Troubleshooting'),
         h('p', null, 'Glide keeps short activity logs (never your keystrokes, clipboard or files) and deletes them after 7 days. Send the newest one if something goes wrong.'),
-        h('button', { class: 'btn', onclick: () => window.glide.openLogs() }, 'Open logs folder')),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn', onclick: () => window.glide.openLogs() }, 'Open logs folder'),
+          h('button', { class: 'btn', onclick: () => openCursorReport() }, 'Cursor report'))),
 
       updates.supported ? null : h('p', { class: 'desc', style: { marginTop: '8px' } }, `Glide ${state.self.version}`),
     ]);

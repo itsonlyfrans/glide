@@ -267,6 +267,9 @@ kbd {
 .modal h2 { font: 600 20px/1.2 var(--display); margin: 0 0 6px; }
 .modal p { margin: 0 0 16px; color: var(--ink-2); }
 .modal .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.modal.wide { width: min(760px, calc(100vw - 40px)); }
+.report { margin: 0; max-height: 52vh; overflow: auto; padding: 14px; border-radius: 10px; background: var(--rail); border: 1px solid var(--line);
+  font: 12.5px/1.55 ui-monospace, "Cascadia Mono", Menlo, monospace; color: var(--ink); white-space: pre-wrap; user-select: text; }
 .code-boxes { display: flex; gap: 8px; justify-content: center; margin: 18px 0 6px; }
 .code-boxes input { width: 48px; height: 58px; text-align: center; font: 600 26px var(--display); background: var(--rail); border: 1px solid var(--line); border-radius: 10px; user-select: text; }
 .code-boxes input:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px rgba(143, 201, 255, .2); }

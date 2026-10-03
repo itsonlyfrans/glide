@@ -75,6 +75,8 @@ pub struct Core {
     /// This computer's model, read once in the background.
     model_found: std::sync::Arc<std::sync::Mutex<Option<DeviceModel>>>,
     model_started: bool,
+    /// Timings behind the cursor report (Settings > Troubleshooting).
+    diag: crate::diag::CursorDiag,
     clipboard: clipboard::ClipboardSync,
     purge_cancel: glide_xfer::Cancel,
     purge_job: Option<tokio::task::JoinHandle<glide_xfer::Result<()>>>,
@@ -355,6 +357,7 @@ impl Core {
             wake_sent: HashMap::new(),
             model_found: Default::default(),
             model_started: false,
+            diag: Default::default(),
             clipboard: clipboard::ClipboardSync::new(platform.clipboard_backend().subscribe()),
             purge_cancel: glide_xfer::Cancel::new(),
             purge_job: None,
@@ -851,6 +854,13 @@ impl Core {
                     self.end_forwarding("unpaired").await?;
                 }
                 Ok(json!({}))
+            }
+            "diag.cursor" => {
+                let _: EmptyParams = params(value)?;
+                if let Some(timings) = self.platform.input_backend().take_move_timings() {
+                    self.diag.add_platform(timings);
+                }
+                Ok(json!({ "text": self.diag.report(&self.state) }))
             }
             "peer.arrange" => {
                 let arrange: PeerArrangeParams = params(value)?;

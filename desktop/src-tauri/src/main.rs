@@ -74,6 +74,15 @@ fn create_window(app: &AppHandle) -> tauri::Result<()> {
         .traffic_light_position(tauri::LogicalPosition::new(16.0, 16.0));
     #[cfg(windows)]
     let builder = builder.decorations(false); // the page draws its own minimize / maximize / close buttons
+    // A test copy on the simulated engine keeps its own web view data, so it can run next to the installed Glide.
+    let builder = if std::env::var_os("GLIDE_MOCK").is_some() {
+        match app.path().app_local_data_dir() {
+            Ok(dir) => builder.data_directory(dir.join("test-webview")),
+            Err(_) => builder,
+        }
+    } else {
+        builder
+    };
     // Automated checks: render normally but far off-screen, out of the taskbar and without taking focus, so a
     // person using the computer never sees test windows appear.
     let builder = if std::env::var_os("GLIDE_TEST_OFFSCREEN").is_some() {
@@ -491,8 +500,13 @@ fn schedule_update_checks(app: AppHandle) {
 fn main() {
     let hidden = std::env::args().any(|a| a == "--hidden");
     let mock = std::env::var_os("GLIDE_MOCK").is_some();
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)))
+    let mut builder = tauri::Builder::default();
+    // One Glide per computer, except a test copy on the simulated engine, which must not hand over to (or block) the
+    // installed Glide someone is using.
+    if !mock {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)));
+    }
+    builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())

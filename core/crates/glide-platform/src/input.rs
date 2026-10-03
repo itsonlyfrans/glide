@@ -330,6 +330,19 @@ pub enum CaptureMode {
     },
 }
 
+/// How quickly remote cursor moves were applied, for the cursor report. Backends that queue moves (macOS) record it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MoveTimings {
+    /// Moves handed to the operating system.
+    pub posted: u64,
+    /// Moves replaced by a newer one before they could be applied.
+    pub replaced: u64,
+    /// Microseconds each applied move waited for the input thread.
+    pub wait_us: Vec<u32>,
+    /// Microseconds the operating system took to accept each move.
+    pub post_us: Vec<u32>,
+}
+
 /// Native input capture and event injection.
 ///
 /// Methods are called from daemon worker threads, never from native callbacks. Backends own
@@ -339,6 +352,11 @@ pub enum CaptureMode {
 pub trait InputBackend: Send + Sync {
     /// Smooth remote cursor moves that arrive in bursts (macOS only; elsewhere moves are always posted at once).
     fn set_move_smoothing(&self, _on: bool) {}
+
+    /// Timings recorded since the last call (and cleared), for the cursor report.
+    fn take_move_timings(&self) -> Option<MoveTimings> {
+        None
+    }
 
     /// Authoritative Secure Input state where supported; independent of permissions.
     fn secure_input_enabled(&self) -> Option<bool> {

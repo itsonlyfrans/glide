@@ -16,7 +16,7 @@ pub use clipboard::{
 };
 pub use input::{
     clamp_cursor_to_monitors, Button, CaptureMode, CaptureStatus, InputBackend, InputEvent,
-    InputEventKind, InputSink, InputSinkError, Key, Monitor, Os, Point,
+    InputEventKind, InputSink, InputSinkError, Key, Monitor, MoveTimings, Os, Point,
 };
 pub use mock::{
     ClipboardOperation, ClipboardRace, InputOperation, MockClipboard, MockInput, MockPlatform,

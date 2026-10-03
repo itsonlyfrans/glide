@@ -9,6 +9,7 @@ pub mod control_unix;
 #[cfg(windows)]
 pub mod control_win;
 pub mod device;
+pub mod diag;
 pub mod ipc;
 pub mod keyboard;
 pub mod layout;

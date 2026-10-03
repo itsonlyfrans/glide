@@ -237,6 +237,23 @@ const handlers = {
     pushState();
     return {};
   },
+  'diag.cursor': () => ({ text: [
+    'Glide cursor report: Studio PC (Windows), Glide 0.1.0-mock (simulated)',
+    'Settings: pointer speed 1.0x, acceleration 0.0, smoothing on',
+    'Connection to MacBook Pro: 2.4 ms round trip',
+    '',
+    "Sending (this computer's mouse moving another computer's cursor):",
+    '  12.0 s of movement, 1000 mouse updates per second',
+    '  gaps between updates: median 1.0 ms, 99% under 1.4 ms, longest 3.0 ms',
+    '  handling each update: median 0.03 ms, 99% under 0.12 ms',
+    '  held back because the connection was busy: 0.0%',
+    '',
+    "Receiving (another computer's mouse moving this computer's cursor):",
+    '  not enough movement recorded yet',
+    '',
+    'What this suggests:',
+    '  Moves arrive often and evenly and are applied quickly.',
+  ].join('\n') }),
   'peer.configure': ({ device_id, clipboard_enabled }) => {
     const p = state.peers.find((x) => x.device_id === device_id);
     if (!p) throw { code: 'not_paired', message: 'That device is not paired.' };
