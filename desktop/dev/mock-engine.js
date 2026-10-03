@@ -96,6 +96,8 @@ if (process.env.GLIDE_MOCK_USER) {
   }];
   state.discovered = [];
   state.layout.devices = [{ device_id: SELF_ID, x: 0, y: 0 }, { device_id: MAC_ID, x: 4283, y: 0 }];
+  // Like the report that the Desk got wrong: the cursor is on the bottom (main) monitor, not the top one.
+  state.cursor = { device_id: SELF_ID, monitor_id: '\\\\.\\DISPLAY2' };
 }
 
 let hostCode = null;
@@ -242,7 +244,7 @@ const handlers = {
     pushState();
     return {};
   },
-  return_home: () => { state.active_device_id = SELF_ID; event('active_changed', { device_id: SELF_ID, reason: 'hotkey' }); pushState(); return {}; },
+  return_home: () => { state.active_device_id = SELF_ID; state.cursor = null; event('active_changed', { device_id: SELF_ID, reason: 'hotkey' }); pushState(); return {}; },
   'transfer.cancel': ({ id }) => { const t = state.transfers.find((x) => x.id === id); if (t) t.state = 'cancelled'; pushState(); return {}; },
   'transfer.confirm': ({ id, accept }) => { const t = state.transfers.find((x) => x.id === id); if (t) t.state = accept ? 'active' : 'cancelled'; pushState(); return {}; },
   'permissions.request': () => {
@@ -285,6 +287,7 @@ if (!process.env.GLIDE_MOCK_QUIET) {
     if (!state.sharing_enabled || !state.peers[0]?.online) return;
     const to = state.active_device_id === SELF_ID ? MAC_ID : SELF_ID;
     state.active_device_id = to;
+    state.cursor = { device_id: to, monitor_id: to === SELF_ID ? state.self.monitors.find((m) => m.primary)?.id : 'm1' };
     event('active_changed', { device_id: to, reason: 'edge' });
     pushState();
   }, 7000);

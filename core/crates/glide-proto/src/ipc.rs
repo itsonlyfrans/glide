@@ -112,6 +112,17 @@ pub struct State {
     pub layout: Layout,
     pub settings: Settings,
     pub transfers: Vec<Transfer>,
+    /// Which computer and screen the cursor is on, as far as this computer knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<CursorPlace>,
+}
+
+/// The computer, and when known the screen, the shared cursor is on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CursorPlace {
+    pub device_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor_id: Option<String>,
 }
 
 /// Effective OS grants plus the daemon's capture recovery status.

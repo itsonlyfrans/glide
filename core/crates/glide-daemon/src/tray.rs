@@ -252,6 +252,7 @@ mod tests {
             layout: Default::default(),
             settings: Default::default(),
             transfers: vec![],
+            cursor: None,
         }));
         assert!(model.update(&state, 0, now));
         assert!(model.view.sharing_enabled);

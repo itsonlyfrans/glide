@@ -185,22 +185,23 @@ kbd {
 .device.mac { --tint: var(--mac); }
 .device.offline { filter: saturate(.25) brightness(.8); }
 .device.offline .mon { border-style: dashed; }
-.device.active .mon:not(.builtin) { border-color: color-mix(in srgb, var(--tint) 45%, #fff); }
-.device.active .mon { box-shadow: 0 0 0 3px rgba(255, 255, 255, .12), 0 0 28px color-mix(in srgb, var(--tint) 30%, transparent), 0 6px 18px rgba(0, 0, 0, .3); }
-/* The cursor marker: a small white pill with a pointer, just inside the top edge of the computer the cursor is on. */
-.here-tag { position: absolute; z-index: 4; transform: translate(8px, 7px); display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 10px 3px 7px; border-radius: 99px; background: var(--here); color: #12151f; font: 600 12px/1.3 var(--text); white-space: nowrap;
-  pointer-events: none; box-shadow: 0 6px 16px rgba(0, 0, 0, .35); }
-.here-tag svg { width: 13px; height: 13px; }
+/* The screen the cursor is on: a brighter edge and a soft glow in the computer's own colour, nothing louder. */
+.device .mon.has-cursor:not(.builtin) { border-color: color-mix(in srgb, var(--tint) 55%, #fff); }
+.device .mon.has-cursor { box-shadow: 0 0 0 1px rgba(255, 255, 255, .22), 0 0 26px color-mix(in srgb, var(--tint) 34%, transparent), 0 6px 18px rgba(0, 0, 0, .3);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--tint) 28%, var(--raise)) 0%, var(--raise) 75%); }
+.mon .nm .here { width: 12px; height: 12px; flex: none; color: #fff; filter: drop-shadow(0 0 5px color-mix(in srgb, var(--tint) 80%, #fff)); animation: here 2.6s ease-in-out infinite; }
+@keyframes here { 50% { opacity: .55; } }
+.mon .num { position: absolute; top: 6px; right: 8px; font-size: 10.5px; font-weight: 600; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .device.selected:not(.active) .mon { box-shadow: 0 0 0 4px color-mix(in srgb, var(--tint) 28%, transparent), 0 8px 26px rgba(0, 0, 0, .35); }
 .device .mon { container-type: size; }
 .mon .info { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px; text-align: center; max-width: 100%; }
 .mon .glyph { color: color-mix(in srgb, var(--tint) 70%, transparent); width: clamp(13px, 10cqw, 26px); height: auto; }
 .mon .nm { font: 600 clamp(11px, 8cqw, 16px)/1.15 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; display: inline-flex; align-items: center; gap: 6px; }
 .mon .nm .dot { width: 7px; height: 7px; }
-.mon .sub { font-size: clamp(10px, 6cqw, 12px); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
-@container (max-height: 70px) { .mon .sub { display: none; } }
-@container (max-height: 44px) { .mon .glyph { display: none; } }
+.mon .sub { font-size: clamp(10px, 6cqw, 12px); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* Small screens drop the logo first; the size stays readable as long as there is room for it. */
+@container (max-height: 88px) { .mon .glyph { display: none; } }
+@container (max-height: 38px) { .mon .sub, .mon .num { display: none; } }
 .seam { position: absolute; background: var(--here); opacity: .8; border-radius: 2px; box-shadow: 0 0 8px rgba(255, 255, 255, .45); pointer-events: none; z-index: 3; }
 
 .welcome { position: absolute; left: 50%; top: 22px; transform: translateX(-50%); width: min(460px, calc(100% - 48px)); padding: 24px 26px; border-radius: 14px; background: color-mix(in srgb, var(--raise) 92%, transparent); border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, .4); z-index: 3; }

@@ -50,11 +50,12 @@ function renderTopbar(s) {
 
 function renderRailFoot(s) {
   const foot = clear($('railFoot'));
-  const onSelf = s.active_device_id === s.self.device_id;
+  const on = s.cursor?.device_id ?? s.active_device_id;
+  const onSelf = on === s.self.device_id;
   const connected = s.peers.filter((p) => p.connection === 'connected').length;
   foot.append(
     h('div', { class: 'where' }, s.sharing_enabled ? icon('pointer', 'here-icon') : h('i', { class: 'dot off' }),
-      s.sharing_enabled ? (onSelf ? 'Cursor is here' : `Cursor is on ${nameOf(s.active_device_id)}`) : 'Sharing paused'),
+      s.sharing_enabled ? (onSelf ? 'Cursor is here' : `Cursor is on ${nameOf(on)}`) : 'Sharing paused'),
     h('div', { class: 'sub' }, `${s.self.name} · ${connected} of ${s.peers.length} connected`));
 }
 

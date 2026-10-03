@@ -665,3 +665,77 @@ async fn a_computers_model_is_remembered_across_reconnects() {
     let restarted = Core::mock(dir.path(), None).await.expect("restart");
     assert_eq!(restarted.state.peers[0].model, Some(model), "kept on disk");
 }
+
+// Bug: the Desk showed the cursor on the top monitor while it was on the bottom one. The engine now reports the exact
+// screen, and when another computer's cursor leaves this one, this computer records where it went.
+#[tokio::test]
+async fn the_cursor_is_reported_on_the_screen_it_is_really_on() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut core = paired_core(dir.path()).await;
+    let input = core.mock_platform().expect("mock").input.clone();
+    input
+        .set_monitors(vec![
+            monitor("top", 870.0, 0.0, 5120.0 / 1.5, 960.0, false),
+            monitor("bottom", 0.0, 960.0, 5120.0, 1440.0, true),
+        ])
+        .expect("screens");
+    core.tick().await.expect("hot-plug handled");
+    let me = core.state.self_info.device_id.clone();
+    let place = |core: &Core| {
+        core.state
+            .cursor
+            .clone()
+            .map(|c| (c.device_id, c.monitor_id))
+    };
+    for (position, expected) in [
+        (
+            Point {
+                x: 2000.0,
+                y: 1500.0,
+            },
+            "bottom",
+        ),
+        (
+            Point {
+                x: 2000.0,
+                y: 400.0,
+            },
+            "top",
+        ),
+    ] {
+        core.capture_input(InputEvent {
+            injected: false,
+            kind: InputEventKind::PointerMoved {
+                position,
+                delta_x: 0.0,
+                delta_y: 0.0,
+            },
+        })
+        .await
+        .expect("local move");
+        assert_eq!(place(&core), Some((me.clone(), Some(expected.to_owned()))));
+    }
+
+    // The other computer's mouse brings the cursor here, then takes it back.
+    let peer = "e".repeat(64);
+    enter(&mut core, 1).await;
+    core.receive_link(LinkEvent::Move {
+        peer_id: peer.clone(),
+        movement: wire::Move {
+            seq: 1,
+            x: 3000.0,
+            y: 2000.0,
+        },
+    })
+    .await
+    .expect("move");
+    assert_eq!(place(&core), Some((me.clone(), Some("bottom".to_owned()))));
+    control(&mut core, ControlMessage::Leave(wire::Leave { epoch: 1 }))
+        .await
+        .expect("leave");
+    assert_eq!(
+        place(&core),
+        Some((peer, None)),
+        "the cursor went back to the other computer"
+    );
+}

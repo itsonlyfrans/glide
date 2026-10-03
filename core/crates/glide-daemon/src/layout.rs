@@ -753,6 +753,15 @@ impl EdgeEngine {
     pub fn cursor(&self) -> Point {
         self.cursor
     }
+
+    /// The computer the cursor is on and the cursor's point in that computer's own coordinates.
+    pub fn cursor_place(&self) -> Option<(&str, Point)> {
+        let device = self.cursor_device.as_str();
+        Some((
+            device,
+            self.desktop.global_to_device_logical(device, self.cursor)?,
+        ))
+    }
     pub fn brain_device(&self) -> &str {
         &self.brain_device
     }

@@ -82,6 +82,7 @@ fn sample_state() -> State {
             state: TransferState::Active,
             error: None,
         }],
+        cursor: None,
     }
 }
 

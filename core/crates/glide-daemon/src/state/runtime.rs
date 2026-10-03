@@ -236,11 +236,15 @@ impl Core {
             return Err(error(ErrorCode::InvalidParams, "invalid move"));
         }
         self.move_seq = Some(movement.seq);
+        let position = Point {
+            x: movement.x,
+            y: movement.y,
+        };
+        // Another computer's mouse is moving the cursor on one of this computer's screens.
+        let me = self.state.self_info.device_id.clone();
+        self.set_cursor_place(&me, Some(position));
         self.inject(InputEventKind::PointerMoved {
-            position: Point {
-                x: movement.x,
-                y: movement.y,
-            },
+            position,
             delta_x: 0.0,
             delta_y: 0.0,
         })
@@ -506,6 +510,7 @@ impl Core {
                     Instant::now(),
                 );
                 self.process_engine_events(events).await?;
+                self.note_cursor_from_engine();
                 self.wake_if_reaching_for_a_sleeping_peer(
                     before,
                     Point {
@@ -686,6 +691,34 @@ impl Core {
         }
     }
 
+    /// Remember where the cursor is (computer and, when known, screen) so the Desk can show it. The state is only
+    /// pushed to the window when this changes, which is rare compared with cursor movement.
+    pub(super) fn set_cursor_place(&mut self, device_id: &str, local: Option<Point>) {
+        let monitors = if device_id == self.state.self_info.device_id {
+            &self.state.self_info.monitors
+        } else if let Some(peer) = self.state.peers.iter().find(|p| p.device_id == device_id) {
+            &peer.monitors
+        } else {
+            return;
+        };
+        let monitor_id = local.and_then(|p| monitor_at(monitors, p));
+        let place = CursorPlace {
+            device_id: device_id.to_owned(),
+            monitor_id,
+        };
+        if self.state.cursor.as_ref() != Some(&place) {
+            self.state.cursor = Some(place);
+            self.dirty = true;
+        }
+    }
+
+    /// The cursor moved on this computer's own mouse: the engine knows exactly where it is.
+    pub(super) fn note_cursor_from_engine(&mut self) {
+        if let Some((device, local)) = self.engine.cursor_place().map(|(d, p)| (d.to_owned(), p)) {
+            self.set_cursor_place(&device, Some(local));
+        }
+    }
+
     /// One latest position survives short transport lock contention, even if capture stops.
     pub(super) async fn flush_pending_move(&mut self) -> Result<(), IpcError> {
         let Some((token, movement)) = self.pending_move else {
@@ -724,10 +757,14 @@ impl Core {
                     p,
                 )
             });
+        let came_home = source.is_some() || self.engine.forwarding_to().is_some();
         let events = self.engine.return_home();
         // Restore the local OS state before waiting for a stalled remote writer.
         self.return_home(reason)?;
         self.rebuild_desktop()?;
+        if came_home {
+            self.note_cursor_from_engine();
+        }
         for (usage, down) in self.held_physical.iter().enumerate() {
             if *down {
                 self.engine.observe_source_key(Key(usage as u16), true);
@@ -1150,6 +1187,8 @@ impl Core {
                     && self.receiving_epoch == Some(leave.epoch) =>
             {
                 self.end_forwarding("remote_leave").await?;
+                // The cursor went back to the computer whose mouse is moving it.
+                self.set_cursor_place(&id, None);
                 self.cursor_visibility(false);
                 self.cursor_hidden_peer = Some((id.clone(), Instant::now()));
             }
@@ -1745,6 +1784,21 @@ fn pairing_message(code: ErrorCode) -> &'static str {
         ErrorCode::Unreachable => "The other device disconnected or could not be reached. Check that Glide is running on both devices.",
         _ => "Pairing could not be completed. Start pairing again on both devices.",
     }
+}
+
+/// The screen containing `p`, a point in the computer's own coordinates (its screens' top-left corner is 0,0).
+fn monitor_at(monitors: &[glide_platform::Monitor], p: Point) -> Option<String> {
+    let min_x = monitors.iter().map(|m| m.x).fold(f64::INFINITY, f64::min);
+    let min_y = monitors.iter().map(|m| m.y).fold(f64::INFINITY, f64::min);
+    let inside = |m: &&glide_platform::Monitor, slack: f64| {
+        let (x, y) = (p.x + min_x, p.y + min_y);
+        x >= m.x - slack && x <= m.x + m.w + slack && y >= m.y - slack && y <= m.y + m.h + slack
+    };
+    monitors
+        .iter()
+        .find(|m| inside(m, 0.0))
+        .or_else(|| monitors.iter().find(|m| inside(m, 2.0)))
+        .map(|m| m.id.clone())
 }
 
 #[cfg(test)]

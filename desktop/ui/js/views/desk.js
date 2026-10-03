@@ -276,38 +276,42 @@ export function mountDesk(root) {
         if (i === builtin) decor.push({ el: h('i', { class: 'deck' }), i, kind: 'deck' });
         else if (standsOn(d, i) && d.dev.model?.kind !== 'imac') decor.push({ el: h('i', { class: 'stand' }), i, kind: 'stand' });
       });
-      const tag = h('div', { class: 'here-tag' }, icon('pointer'), 'Cursor');
       const el = h('div', {
         class: 'device', tabindex: 0, role: 'button', 'aria-label': `${d.dev.name}, ${osName(d.dev.os)}`,
         onpointerdown: (e) => startDrag(e, d), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') select(d.id); },
-      }, decor.map((x) => x.el), mons, tag);
+      }, decor.map((x) => x.el), mons);
       world.insertBefore(el, groupBtn);
-      els.set(d.id, { el, mons, labels, decor, tag });
+      els.set(d.id, { el, mons, labels, decor });
     }
   }
 
   function paint(state) {
+    // Where the cursor is: the engine reports the computer and, when it knows, the exact screen.
+    const place = state.sharing_enabled ? (state.cursor ?? { device_id: state.active_device_id }) : null;
     for (const d of list) {
       const rec = els.get(d.id);
       if (!rec) continue;
-      const active = state.active_device_id === d.id && state.sharing_enabled;
+      const active = place?.device_id === d.id;
+      let here = -1;
+      if (active) {
+        here = d.mons.findIndex((m) => m.id === place.monitor_id);
+        if (here < 0) here = Math.max(0, d.mons.findIndex((m) => m.primary));
+      }
       const offline = !d.self && d.dev.connection !== 'connected';
       rec.el.className = `device ${d.dev.os === 'macos' ? 'mac' : 'win'}${active ? ' active' : ''}${offline ? ' offline' : ''}${store.selectedId === d.id ? ' selected' : ''}${dragging?.d === d ? ' dragging' : ''}${isSeparate(d) ? ' separate' : ''}`;
       const st = statusText(d);
       const many = d.mons.length > 1;
       rec.labels.forEach((label, i) => {
         const m = d.mons[i];
+        // The screen with the cursor glows softly and shows a small pointer in place of the status dot.
+        rec.mons[i].classList.toggle('has-cursor', i === here);
+        rec.mons[i].title = i === here ? 'The cursor is on this screen' : '';
         clear(label).append(
           osIcon(d.dev.os, 'glyph'),
-          h('div', { class: 'nm' }, h('i', { class: `dot ${st.dot}` }), d.dev.name),
-          h('div', { class: 'sub' }, many ? `Screen ${i + 1} · ${pixels(d, m)}` : pixels(d, m)));
+          h('div', { class: 'nm' }, i === here ? icon('pointer', 'here') : h('i', { class: `dot ${st.dot}` }), d.dev.name),
+          h('div', { class: 'sub' }, pixels(d, m)));
+        if (many) label.append(h('span', { class: 'num' }, String(i + 1)));
       });
-      rec.tag.style.display = active ? '' : 'none';
-      if (active) {
-        // In the top-left corner of the topmost screen, clear of the labels in the middle.
-        const top = d.mons.reduce((a, b) => (b.y < a.y ? b : a));
-        Object.assign(rec.tag.style, { left: `${top.x * tf.s}px`, top: `${top.y * tf.s}px` });
-      }
     }
   }
 

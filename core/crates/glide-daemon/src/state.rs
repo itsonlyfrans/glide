@@ -276,6 +276,7 @@ impl Core {
             layout,
             settings,
             transfers: Vec::new(),
+            cursor: None,
         };
         validate_layout(&state.layout.devices, &state)
             .map_err(|error| anyhow::anyhow!(error.message))?;
