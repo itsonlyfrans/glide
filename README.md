@@ -11,7 +11,7 @@ Glide lets one keyboard and mouse drive all your computers. Push the cursor off 
 appears on your Mac. Copy text, an image or a file on one computer and paste it on the other. It works between
 Windows and macOS in any combination, over your own network, with everything encrypted.
 
-<p align="center"><img src="docs/images/desk.png" alt="The Glide Desk: a Windows PC with two screens and a MacBook placed next to each other" width="88%"></p>
+<p align="center"><img src="docs/images/demo.gif" alt="Glide in action: the cursor moves from a Windows PC to a MacBook, a large video copies across in the background and is ready to paste" width="88%"><br><sub>Recorded from the real app with simulated computers. <a href="docs/images/demo.mp4">MP4 version</a>.</sub></p>
 
 ## Features
 
@@ -48,8 +48,8 @@ Then:
 Escape hatch: **Ctrl+Alt+Shift+Home** always brings the cursor back to the computer you are sitting at.
 
 <p align="center">
+  <img src="docs/images/desk.png" alt="The Desk: a Windows PC with two screens next to a MacBook" width="49%">
   <img src="docs/images/computers.png" alt="Pairing and nearby computers" width="49%">
-  <img src="docs/images/settings.png" alt="Settings" width="49%">
 </p>
 
 ## How it works
