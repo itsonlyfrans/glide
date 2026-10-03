@@ -98,6 +98,8 @@ jobs:
         run: |
           # Notarize only release builds, and only when the Apple details are present.
           if [ -z "$APPLE_ID" ] || [ "$GITHUB_REF_TYPE" != "tag" ]; then unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; fi
+          # The build cache keeps the target folder: never let an older version's installers ride along.
+          rm -rf "$CARGO_TARGET_DIR/${{ matrix.triple }}/release/bundle"
           pnpm exec tauri build --target ${{ matrix.triple }}
       - name: Collect installers
         shell: bash
@@ -129,8 +131,11 @@ jobs:
         run: |
           VERSION="${TAG#v}"
           cd dist
-          WIN=$(ls *-setup.exe | head -1)
-          MAC=$(ls *.app.tar.gz | head -1)
+          # Only this version's files, and exactly one of each, or the release stops here.
+          WIN=$(ls *_"$VERSION"_*-setup.exe)
+          MAC=$(ls *.app.tar.gz)
+          [ "$(echo "$WIN" | wc -l)" = 1 ] && [ "$(echo "$MAC" | wc -l)" = 1 ] && [ -f "$WIN.sig" ] && [ -f "$MAC.sig" ] || { echo "unexpected installer files:"; ls; exit 1; }
+          ls | grep -E '_[0-9]+\.[0-9]+\.[0-9]+_' | grep -v "_${VERSION}_" && { echo "files from another version"; exit 1; } || true
           python3 - "$VERSION" "$TAG" "$REPO" "$WIN" "$MAC" <<'PY'
           import json, sys, datetime, urllib.parse
           version, tag, repo, win, mac = sys.argv[1:6]
