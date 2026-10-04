@@ -785,6 +785,22 @@ impl Core {
                 )
             });
         let came_home = source.is_some() || self.engine.forwarding_to().is_some();
+        if came_home {
+            // Static messages only: the log never carries payloads, so each reason gets its own audited line.
+            match reason {
+                "local_input" => tracing::info!(
+                    "cursor returned: this computer's own keyboard or mouse was used"
+                ),
+                "return_home_hotkey" => tracing::info!("cursor returned: return-home hotkey"),
+                "link_lost" | "peer_unavailable" | "transport_changed" => {
+                    tracing::info!("cursor returned: connection to the other computer was lost")
+                }
+                "remote_leave" | "peer_left" => {
+                    tracing::info!("cursor returned: the other computer handed it back")
+                }
+                _ => tracing::info!("cursor returned: other reason"),
+            }
+        }
         let events = self.engine.return_home();
         // Restore the local OS state before waiting for a stalled remote writer.
         self.return_home(reason)?;
