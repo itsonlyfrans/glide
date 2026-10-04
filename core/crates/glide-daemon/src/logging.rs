@@ -37,6 +37,11 @@ const MESSAGES: &[&str] = &[
     "clipboard file transfer failed",
     "clipboard not shared: marked sensitive",
     "clipboard files not shared: unsupported or duplicate names",
+    "cursor returned: this computer's own keyboard or mouse was used",
+    "cursor returned: return-home hotkey",
+    "cursor returned: connection to the other computer was lost",
+    "cursor returned: the other computer handed it back",
+    "cursor returned: other reason",
 ];
 
 enum Command {
