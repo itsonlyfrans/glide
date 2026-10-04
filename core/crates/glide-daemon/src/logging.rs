@@ -28,6 +28,15 @@ const MESSAGES: &[&str] = &[
     "could not read live pairing state",
     "could not reconcile pairing state",
     "peer registration pending or rejected",
+    "received clipboard dropped: this computer's clipboard changed first",
+    "received clipboard dropped: no longer allowed",
+    "received clipboard could not be written by the system",
+    "received clipboard was rejected by the system",
+    "clipboard offer ignored: invalid or turned off here",
+    "clipboard files not fetched: transfer link unavailable",
+    "clipboard file transfer failed",
+    "clipboard not shared: marked sensitive",
+    "clipboard files not shared: unsupported or duplicate names",
 ];
 
 enum Command {
