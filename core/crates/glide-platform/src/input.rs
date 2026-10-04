@@ -358,6 +358,13 @@ pub trait InputBackend: Send + Sync {
         None
     }
 
+    /// Which modifier keys (HID usages 0xE0..=0xE7, in order) the system could still consider held. A key reported
+    /// `false` is certainly up, so a key-up Glide never saw (the app switcher, Secure Input) can be dropped.
+    /// `None` when the backend cannot tell.
+    fn modifiers_maybe_held(&self) -> Option<[bool; 8]> {
+        None
+    }
+
     /// Authoritative Secure Input state where supported; independent of permissions.
     fn secure_input_enabled(&self) -> Option<bool> {
         None
