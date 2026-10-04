@@ -47,6 +47,13 @@ const MESSAGES: &[&str] = &[
     "clipboard transfer storage failed: folder or file missing",
     "clipboard transfer storage failed: already exists",
     "clipboard transfer storage failed: other",
+    "clipboard transfer failed: size limit",
+    "clipboard transfer failed: disk space",
+    "clipboard transfer failed: timed out",
+    "clipboard transfer failed: verification",
+    "clipboard transfer failed: cancelled",
+    "clipboard transfer failed: connection or file error",
+    "clipboard transfer failed: other",
 ];
 
 enum Command {

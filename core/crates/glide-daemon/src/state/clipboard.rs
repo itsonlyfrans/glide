@@ -1168,6 +1168,30 @@ impl Core {
                         glide_xfer::Error::DiskSpace | glide_xfer::Error::Storage(_)
                     ) || (job_transfer.direction == TransferDirection::Send
                         && matches!(&error, glide_xfer::Error::Limit(_)));
+                    match &error {
+                        glide_xfer::Error::Limit(_) => {
+                            tracing::info!("clipboard transfer failed: size limit")
+                        }
+                        glide_xfer::Error::DiskSpace => {
+                            tracing::info!("clipboard transfer failed: disk space")
+                        }
+                        glide_xfer::Error::Timeout => {
+                            tracing::info!("clipboard transfer failed: timed out")
+                        }
+                        glide_xfer::Error::Integrity
+                        | glide_xfer::Error::Invalid(_)
+                        | glide_xfer::Error::Codec(_) => {
+                            tracing::info!("clipboard transfer failed: verification")
+                        }
+                        glide_xfer::Error::Cancelled => {
+                            tracing::info!("clipboard transfer failed: cancelled")
+                        }
+                        glide_xfer::Error::Io(_) => {
+                            tracing::info!("clipboard transfer failed: connection or file error")
+                        }
+                        glide_xfer::Error::Storage(_) => {}
+                        _ => tracing::info!("clipboard transfer failed: other"),
+                    }
                     if let glide_xfer::Error::Storage(io) = &error {
                         // Only the kind of failure is logged (never a path or OS message).
                         match io.kind() {
@@ -1203,6 +1227,24 @@ impl Core {
                     self.fail_native_transfer(job_transfer.clone(), body);
                     if actionable {
                         self.clipboard_notice(body);
+                    }
+                    if job_transfer.direction == TransferDirection::Send {
+                        // Tell the asking computer to stop: otherwise it re-requests every few seconds and every
+                        // attempt fails (and notifies) again.
+                        let clip_id = self
+                            .clipboard
+                            .outgoing
+                            .as_ref()
+                            .filter(|outgoing| {
+                                transfer::transfer_id(
+                                    &job_transfer.peer_id,
+                                    &outgoing.announcement.clip_id,
+                                ) == id
+                            })
+                            .map(|outgoing| outgoing.announcement.clip_id.clone());
+                        if let Some(clip_id) = clip_id {
+                            self.send_clip_failure(&job_transfer.peer_id, &clip_id);
+                        }
                     }
                     if job_transfer.direction == TransferDirection::Receive {
                         let matching_incoming = self
