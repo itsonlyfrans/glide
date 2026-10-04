@@ -1234,7 +1234,7 @@ fn capture_event(context: &mut Context, kind: u32, event: Handle) -> Handle {
     if magic == MAGIC {
         return event;
     }
-    let injected = source_pid != 0;
+    let mut injected = source_pid != 0;
     if matches!(kind, 10..=12) {
         let secure = secure_input();
         if context.secure.swap(secure, Ordering::AcqRel) != secure {
@@ -1299,6 +1299,10 @@ fn capture_event(context: &mut Context, kind: u32, event: Handle) -> Handle {
                 context.fallback(CaptureFallback::UnsupportedEvent);
                 return event;
             };
+            // macOS repeats a held key itself, and those repeats carry neither our tag nor a
+            // source process. A key Glide is holding is the other computer's key, not this
+            // keyboard: treating its echoes as local input sent the cursor back mid-typing.
+            injected |= context.keys[usize::from(key)];
             let down = if kind == 12 && key == 0x39 {
                 // Caps Lock flags reflect the latch, not the physical down/up transition.
                 // Emit one complete press per latch change so turning Caps OFF also toggles.
