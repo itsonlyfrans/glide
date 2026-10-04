@@ -42,6 +42,10 @@ const MESSAGES: &[&str] = &[
     "cursor returned: connection to the other computer was lost",
     "cursor returned: the other computer handed it back",
     "cursor returned: other reason",
+    "clipboard transfer storage failed: permission denied",
+    "clipboard transfer storage failed: folder or file missing",
+    "clipboard transfer storage failed: already exists",
+    "clipboard transfer storage failed: other",
 ];
 
 enum Command {
