@@ -84,6 +84,30 @@ impl HookContext {
     }
 }
 
+/// Physical keys Windows itself has seen go down. While control is on another computer every physical key is
+/// swallowed, so a key held across the crossing would otherwise never see its release and stay stuck on this PC.
+static OS_KEY_DOWN: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
+
+/// Decide whether the hook swallows this key event, keeping `OS_KEY_DOWN` in step with what Windows has seen.
+/// The Windows keys are always swallowed on release: a lone Win release would open the Start menu.
+fn block_key(vk: u32, up: bool, injected: bool, swallowing: bool) -> bool {
+    if injected {
+        return false;
+    }
+    let Some(seen) = OS_KEY_DOWN.get(vk as usize) else {
+        return swallowing;
+    };
+    if !swallowing {
+        seen.store(!up, Ordering::Release);
+        return false;
+    }
+    let is_win = vk == u32::from(VK_LWIN) || vk == u32::from(VK_RWIN);
+    if up && !is_win && seen.swap(false, Ordering::AcqRel) {
+        return false;
+    }
+    true
+}
+
 unsafe extern "system" fn keyboard_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 && lp != 0 {
         // SAFETY: Windows guarantees a KBDLLHOOKSTRUCT for HC_ACTION for this callback.
@@ -97,7 +121,9 @@ unsafe extern "system" fn keyboard_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LR
             }
             // SAFETY: TLS pointer is valid only while hooks run on the owning loop thread.
             let context = unsafe { &*context };
-            context.push(Sample::Key(data)) && !injected && context.swallow.load(Ordering::Acquire)
+            let pushed = context.push(Sample::Key(data));
+            let swallowing = pushed && !injected && context.swallow.load(Ordering::Acquire);
+            block_key(data.vkCode, data.flags & LLKHF_UP != 0, injected, swallowing)
         });
         if block {
             return 1;
@@ -1307,6 +1333,21 @@ fn translate_mouse(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Bug: Ctrl held on this PC while the cursor crossed to the Mac stayed stuck here, because its release was swallowed.
+    #[test]
+    fn a_modifier_held_across_the_crossing_gets_its_release_but_other_swallowed_keys_do_not() {
+        let ctrl = u32::from(VK_LCONTROL);
+        let a = u32::from(b'A');
+        assert!(!block_key(ctrl, false, false, false));
+        assert!(block_key(a, false, false, true));
+        assert!(block_key(a, true, false, true));
+        assert!(!block_key(ctrl, true, false, true));
+        assert!(block_key(ctrl, true, false, true));
+        let win = u32::from(VK_LWIN);
+        assert!(!block_key(win, false, false, false));
+        assert!(block_key(win, true, false, true));
+        assert!(!block_key(ctrl, true, true, true));
+    }
     // Bug: with a Logitech MX Master, Back and Forward did nothing on the other computer, because Logitech Options+
     // delivers them as injected events and Glide ignored every injected mouse event.
     #[test]
