@@ -1067,10 +1067,8 @@ fn publish_bundle(
             }
         }
     }
-    if has_bytes || file_items.is_empty() {
-        if !set_marker(&item, marker) {
-            return Err(BackendError::Unavailable);
-        }
+    if (has_bytes || file_items.is_empty()) && !set_marker(&item, marker) {
+        return Err(BackendError::Unavailable);
     }
     let mut all_items: Vec<Retained<NSPasteboardItem>> = Vec::with_capacity(file_items.len() + 1);
     if has_bytes || file_items.is_empty() {
