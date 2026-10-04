@@ -89,6 +89,8 @@ pub struct Core {
     )>,
     permission_requests: VecDeque<u64>,
     next_permission_check: Instant,
+    /// Set while the displays could not be read (all asleep, lid closed); retried until they come back.
+    monitors_retry: Option<Instant>,
     capture_pending: bool,
     permission_recovery_notified: bool,
     engine: crate::layout::EdgeEngine,
@@ -349,6 +351,7 @@ impl Core {
             permission_job: None,
             permission_requests: VecDeque::new(),
             next_permission_check: Instant::now(),
+            monitors_retry: None,
             capture_pending,
             permission_recovery_notified: false,
             monitor_rx: platform.input_backend().monitor_changes(),
@@ -1105,12 +1108,25 @@ impl Core {
                 }
             }
         }
-        if self.monitor_rx.try_recv().is_ok() {
+        let retry_due = self.monitors_retry.is_some_and(|due| Instant::now() >= due);
+        if self.monitor_rx.try_recv().is_ok() || retry_due {
             self.end_forwarding("monitors_changed")
                 .await
                 .map_err(|error| anyhow::anyhow!(error.message))?;
             while self.monitor_rx.try_recv().is_ok() {}
-            self.native_monitors = self.platform.input_backend().monitors()?;
+            // Displays can vanish for a while (screens asleep, lid closed, locked). Keep the current layout and
+            // look again shortly instead of stopping the engine, which then could not restart either.
+            match self.platform.input_backend().monitors() {
+                Ok(monitors) => {
+                    self.monitors_retry = None;
+                    self.native_monitors = monitors;
+                }
+                Err(error) => {
+                    tracing::warn!(?error, "displays unavailable; retrying");
+                    self.monitors_retry = Some(Instant::now() + Duration::from_secs(1));
+                    return Ok(());
+                }
+            }
             self.state.self_info.monitors = crate::arrangement::arrange(
                 &self.native_monitors,
                 &self.state.settings.display.arrangement,
@@ -1127,8 +1143,11 @@ impl Core {
                     anyhow::bail!("Could not publish changed displays; restart Glide.");
                 }
             }
-            self.rebuild_desktop()
-                .map_err(|failure| anyhow::anyhow!(failure.message))?;
+            if let Err(failure) = self.rebuild_desktop() {
+                tracing::warn!(message = %failure.message, "desktop not rebuilt after a display change; retrying");
+                self.monitors_retry = Some(Instant::now() + Duration::from_secs(1));
+                return Ok(());
+            }
             self.dirty = true;
         }
         if self.capture_sink.take_overflow() {

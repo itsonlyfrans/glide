@@ -44,7 +44,7 @@ jobs:
         run: |
           rustup target add aarch64-apple-darwin
           cargo check --locked -p glide-platform -p glide-proto --target aarch64-apple-darwin
-          Compress-Archive -Path "$env:CARGO_TARGET_DIR/release/glided.exe" -DestinationPath "$env:CARGO_TARGET_DIR/glided-windows.zip"
+          Compress-Archive -Path "$env:CARGO_TARGET_DIR/release/glided.exe" -DestinationPath "$env:CARGO_TARGET_DIR/glided-windows.zip" -Force
       - if: runner.os == 'macOS'
         run: tar -czf "$CARGO_TARGET_DIR/glided-macos.tar.gz" -C "$CARGO_TARGET_DIR/release" glided
       - uses: actions/upload-artifact@v4
