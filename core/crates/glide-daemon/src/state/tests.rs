@@ -2383,3 +2383,62 @@ async fn permission_shutdown_answers_pending_requests_instead_of_leaving_them_ha
     assert!(core.permission_job.is_none());
     assert!(core.permission_requests.is_empty());
 }
+
+#[tokio::test]
+async fn a_modifier_the_system_says_is_up_is_not_pressed_on_the_other_computer() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut core = paired_core(dir.path()).await;
+    let peer = core.state.peers[0].device_id.clone();
+    let link = Arc::new(InMemoryLink::new());
+    link.script_reachable("127.0.0.1:24801", peer.clone());
+    link.connect("127.0.0.1:24801", Some(&peer))
+        .await
+        .expect("connected peer");
+    core.link = link.clone();
+    request(
+        &mut core,
+        "set_settings",
+        json!({"patch":{"switching":{"edge_delay_ms":0,"corner_dead_zone_px":0}}}),
+    )
+    .await;
+    // Ctrl went down, but its release never reached Glide (the app switcher, Secure Input).
+    core.capture_input(InputEvent {
+        injected: false,
+        kind: InputEventKind::Key {
+            key: Key(0xe0),
+            down: true,
+        },
+    })
+    .await
+    .expect("ctrl down");
+    core.mock_platform()
+        .expect("mock")
+        .input
+        .set_modifiers_maybe_held(Some([false; 8]))
+        .expect("system modifier state");
+    link.take_sent_reliable();
+    core.capture_input(InputEvent {
+        injected: false,
+        kind: InputEventKind::PointerMoved {
+            position: glide_platform::Point { x: 0.0, y: 200.0 },
+            delta_x: 2000.0,
+            delta_y: 200.0,
+        },
+    })
+    .await
+    .expect("forward");
+    assert_eq!(core.state.active_device_id, peer);
+    let enter = link
+        .take_sent_reliable()
+        .into_iter()
+        .find_map(|(_, message)| match message {
+            WireMessage::Control(ControlMessage::Enter(enter)) => Some(enter),
+            _ => None,
+        })
+        .expect("enter sent");
+    assert_eq!(
+        enter.modifiers_down.iter().count(),
+        0,
+        "a stale Ctrl must not be pressed on the other computer"
+    );
+}

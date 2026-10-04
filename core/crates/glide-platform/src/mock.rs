@@ -88,6 +88,7 @@ struct MockInputState {
     permission_requests: usize,
     capture_starts: usize,
     secure_input: Option<bool>,
+    modifiers_maybe_held: Option<[bool; 8]>,
     injected_events: Vec<InputEvent>,
     held_keys: HashSet<Key>,
     held_buttons: HashSet<Button>,
@@ -131,6 +132,7 @@ impl Default for MockInput {
                 permission_requests: 0,
                 capture_starts: 0,
                 secure_input: None,
+                modifiers_maybe_held: None,
                 injected_events: Vec::new(),
                 held_keys: HashSet::new(),
                 held_buttons: HashSet::new(),
@@ -296,6 +298,12 @@ impl MockInput {
         Ok(self.lock()?.held_keys.clone())
     }
 
+    /// Scripts which modifier keys the system reports as possibly held (`None`: it cannot tell).
+    pub fn set_modifiers_maybe_held(&self, held: Option<[bool; 8]>) -> Result<(), BackendError> {
+        self.lock()?.modifiers_maybe_held = held;
+        Ok(())
+    }
+
     /// Returns buttons currently held by injected events.
     pub fn held_buttons(&self) -> Result<HashSet<Button>, BackendError> {
         Ok(self.lock()?.held_buttons.clone())
@@ -308,6 +316,12 @@ impl MockInput {
 }
 
 impl InputBackend for MockInput {
+    fn modifiers_maybe_held(&self) -> Option<[bool; 8]> {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|state| state.modifiers_maybe_held)
+    }
     fn secure_input_enabled(&self) -> Option<bool> {
         self.state.lock().ok().and_then(|state| state.secure_input)
     }

@@ -451,6 +451,26 @@ impl Core {
         Ok(())
     }
 
+    /// A key-up the system never delivered (the app switcher, Secure Input) leaves a modifier "held" here, and the next
+    /// crossing would press it on the other computer for good. Drop the ones the system says are up.
+    fn drop_stale_modifiers(&mut self) {
+        if self.engine.forwarding_to().is_some()
+            || !(0xe0..=0xe7).any(|usage| self.held_physical[usage])
+        {
+            return;
+        }
+        let Some(maybe_held) = self.platform.input_backend().modifiers_maybe_held() else {
+            return;
+        };
+        for (index, maybe) in maybe_held.into_iter().enumerate() {
+            let usage = 0xe0 + index;
+            if !maybe && self.held_physical[usage] {
+                self.held_physical[usage] = false;
+                self.engine.observe_source_key(Key(usage as u16), false);
+            }
+        }
+    }
+
     /// Consume a physical sample outside the hook callback. Injected samples never preempt control.
     pub async fn capture_input(&mut self, event: InputEvent) -> Result<(), IpcError> {
         if event.injected {
@@ -491,6 +511,7 @@ impl Core {
                 delta_y,
             } if self.state.sharing_enabled => {
                 let handling = Instant::now();
+                self.drop_stale_modifiers();
                 let position = crate::arrangement::to_arranged(
                     &self.native_monitors,
                     &self.state.self_info.monitors,

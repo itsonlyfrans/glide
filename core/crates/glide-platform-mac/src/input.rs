@@ -395,6 +395,10 @@ impl InputBackend for MacInput {
     fn request_permissions(&self) -> Permissions {
         MacInput::request_permissions(self)
     }
+    fn modifiers_maybe_held(&self) -> Option<[bool; 8]> {
+        // SAFETY: read-only Quartz state query, valid from any thread.
+        Some(modifiers_maybe_down(unsafe { CGEventSourceFlagsState(1) }))
+    }
     fn secure_input_enabled(&self) -> Option<bool> {
         Some(secure_input())
     }
