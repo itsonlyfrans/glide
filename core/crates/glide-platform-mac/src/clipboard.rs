@@ -1029,7 +1029,11 @@ fn publish_bundle(
     expected: ClipboardChangeToken,
     admission: ClipboardAdmission,
 ) -> Result<ClipboardPublish, BackendError> {
+    // One pasteboard item per file, each with its own public.file-url: the legacy NSFilenamesPboardType is not a
+    // valid UTI and macOS refuses to store it on an item, which made every received file clipboard fail.
     let item = NSPasteboardItem::new();
+    let mut has_bytes = false;
+    let mut file_items: Vec<Retained<NSPasteboardItem>> = Vec::new();
     for content in contents {
         if content.sensitivity.should_exclude() {
             return Err(BackendError::InvalidInput(
@@ -1042,6 +1046,7 @@ fn publish_bundle(
                 if !item.setData_forType(&NSData::with_bytes(bytes.as_slice()), native_type) {
                     return Err(BackendError::Unavailable);
                 }
+                has_bytes = true;
             }
             OwnedData::Files(files) => {
                 if files.entries.is_empty() || files.entries.len() > MAX_NATIVE_ITEMS {
@@ -1049,29 +1054,29 @@ fn publish_bundle(
                         "invalid clipboard file count".into(),
                     ));
                 }
-                let mut paths = Vec::with_capacity(files.entries.len());
-                for (index, entry) in files.entries.iter().enumerate() {
-                    let (path, url) = prepare_file_url(entry)?;
-                    if index == 0 && !item.setString_forType(&url, ns_string!("public.file-url")) {
+                for entry in files.entries.iter() {
+                    let (_, url) = prepare_file_url(entry)?;
+                    let file_item = NSPasteboardItem::new();
+                    if !file_item.setString_forType(&url, ns_string!("public.file-url"))
+                        || !set_marker(&file_item, marker)
+                    {
                         return Err(BackendError::Unavailable);
                     }
-                    paths.push(path);
-                }
-                let paths = NSArray::from_retained_slice(&paths);
-                // SAFETY: a filenames pasteboard property list is an NSArray of
-                // NSString absolute paths; each element was validated above.
-                if !unsafe {
-                    item.setPropertyList_forType(&paths, ns_string!("NSFilenamesPboardType"))
-                } {
-                    return Err(BackendError::Unavailable);
+                    file_items.push(file_item);
                 }
             }
         }
     }
-    if !set_marker(&item, marker) {
-        return Err(BackendError::Unavailable);
+    if has_bytes || file_items.is_empty() {
+        if !set_marker(&item, marker) {
+            return Err(BackendError::Unavailable);
+        }
     }
-    let objects = NSArray::from_retained_slice(&[ProtocolObject::from_retained(item.clone())]);
+    let mut all_items: Vec<Retained<NSPasteboardItem>> = Vec::with_capacity(file_items.len() + 1);
+    if has_bytes || file_items.is_empty() {
+        all_items.push(item.clone());
+    }
+    all_items.extend(file_items.iter().cloned());
     let actual = ClipboardChangeToken(state.pasteboard.changeCount() as u64);
     if actual != expected {
         return Ok(ClipboardPublish::ReplacedLocalChange {
@@ -1084,6 +1089,11 @@ fn publish_bundle(
     let owned_count = state.pasteboard.clearContents();
     state.owned = None;
     state.delayed = None;
+    let writers: Vec<&ProtocolObject<dyn objc2_app_kit::NSPasteboardWriting>> = all_items
+        .iter()
+        .map(|item| ProtocolObject::from_ref(&**item))
+        .collect();
+    let objects = NSArray::from_slice(&writers);
     if !state.pasteboard.writeObjects(&objects) {
         // Never erase another application's newer copy during failure cleanup.
         // A marker alone is forgeable; a changed count may belong to a newer
@@ -1110,8 +1120,12 @@ fn publish_bundle(
     state.owned = Some(OwnedClipboard {
         marker,
         count,
-        primary: Some(item),
-        files: Vec::new(),
+        primary: if has_bytes || file_items.is_empty() {
+            Some(item)
+        } else {
+            None
+        },
+        files: file_items,
     });
     Ok(ClipboardPublish::Published {
         change_token: ClipboardChangeToken(count as u64),
@@ -1141,32 +1155,7 @@ fn read_files(state: &WorkerState) -> Result<Option<FileList>, BackendError> {
         let mut paths = Vec::new();
         for index in 0..items.count() {
             let item = items.objectAtIndex(index);
-            if let Some(list) = item.propertyListForType(ns_string!("NSFilenamesPboardType")) {
-                let list = list.downcast_ref::<NSArray<AnyObject>>().ok_or_else(|| {
-                    BackendError::InvalidInput("invalid filenames property list".into())
-                })?;
-                if list.count() > MAX_NATIVE_ITEMS {
-                    return Err(BackendError::InvalidInput(
-                        "too many clipboard files".into(),
-                    ));
-                }
-                for index in 0..list.count() {
-                    let value = list.objectAtIndex(index);
-                    let path = value
-                        .downcast_ref::<NSString>()
-                        .filter(|path| path.length() <= MAX_FILE_URL_UNITS)
-                        .ok_or_else(|| {
-                            BackendError::InvalidInput("invalid clipboard filename".into())
-                        })?;
-                    let path = std::path::PathBuf::from(path.to_string());
-                    if !path.is_absolute() || path.to_string_lossy().contains('\0') {
-                        return Err(BackendError::InvalidInput(
-                            "invalid clipboard file path".into(),
-                        ));
-                    }
-                    paths.push(path);
-                }
-            } else if let Some(url) = item.stringForType(ns_string!("public.file-url")) {
+            if let Some(url) = item.stringForType(ns_string!("public.file-url")) {
                 if url.length() > MAX_FILE_URL_UNITS {
                     return Err(BackendError::InvalidInput(
                         "clipboard file URL too long".into(),

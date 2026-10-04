@@ -198,8 +198,8 @@ Leave boxes unchecked until exercised on a Mac; do not infer a pass from pure lo
   before commit: result is Revoked with no ownership change.
 - [ ] Inject preparation/native write failure: no partially published success; verify
   PartialFailure count/clear status and preservation of a competing local owner.
-- [ ] Publish several real files/directories in one item with public.file-url and
-  complete NSFilenamesPboardType list. Paste all of them in Finder and native apps;
+- [ ] Publish several real files/directories as one pasteboard item each with
+  public.file-url. Paste all of them in Finder and native apps;
   verify order, Unicode, spaces, #, symlink rejection and staging lease retention.
 - [ ] A forged external marker is not reported as owned in read_snapshot; repeated
   self publication does not loop. Confirm no delayed provider/network wait exists.
