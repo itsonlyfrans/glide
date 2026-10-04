@@ -205,6 +205,22 @@ impl NativeLink {
         }))
     }
 
+    /// Snapshots of every live pinned session, for an events consumer that missed its `PeerUpdated`.
+    pub(crate) fn live_peers(&self) -> Vec<Peer> {
+        mutex(&self.0.sessions).map_or_else(
+            |_| Vec::new(),
+            |sessions| {
+                sessions
+                    .values()
+                    .filter(|s| {
+                        s.conn.close_reason().is_none() && self.0.pins.contains(&s.peer.device_id)
+                    })
+                    .filter_map(|s| mutex(&s.metadata).ok().map(|m| m.clone()))
+                    .collect()
+            },
+        )
+    }
+
     pub(crate) fn connected(&self, id: &str) -> bool {
         mutex(&self.0.sessions).is_ok_and(|sessions| {
             sessions

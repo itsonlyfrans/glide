@@ -1539,6 +1539,21 @@ impl Core {
                 tracing::error!(code = ?failure.code, "peer registration pending or rejected");
             }
         }
+        // A peer shown offline while its session is live missed its PeerUpdated (a lagged channel, or a
+        // session that came up before we subscribed). Nothing else would correct it, and this computer
+        // could not cross to it while the other one still crossed here.
+        if let Some(manager) = &self.native_manager {
+            let stale = self
+                .state
+                .peers
+                .iter()
+                .any(|p| !p.online && self.link.peer_token(&p.device_id).is_ok());
+            if stale && self.last_session_resync.elapsed() >= Duration::from_secs(1) {
+                self.last_session_resync = Instant::now();
+                tracing::info!("peer shown offline while connected; resyncing");
+                manager.announce_live_peers();
+            }
+        }
         for _ in 0..128 {
             let event = match self.peer_events.try_recv() {
                 Ok(event) => event,

@@ -20,6 +20,7 @@ const QUEUE: usize = 64;
 // Do not add payloads, paths, OS error strings or Debug implementations here.
 const MESSAGES: &[&str] = &[
     "engine starting",
+    "peer shown offline while connected; resyncing",
     "engine stopped",
     "native tray unavailable; engine continues running",
     "could not open Glide window",

@@ -427,6 +427,17 @@ impl NativePeerManager {
             .map_err(|_| NativeError::Security("pin state poisoned".into()))
     }
 
+    /// Re-announce every live session. Recovers a consumer whose `PeerUpdated` was lost to a lagged
+    /// channel or sent before it subscribed; without it that peer stays "offline" for the whole session.
+    pub fn announce_live_peers(&self) {
+        for peer in self.shared.link.live_peers() {
+            let _ = self
+                .shared
+                .event_tx
+                .send(PeerManagerEvent::PeerUpdated(peer));
+        }
+    }
+
     /// Apply `settings.network.discovery` without changing any trusted pin.
     pub fn set_discovery(&self, enabled: bool) -> Result<(), NativeError> {
         self.shared
@@ -1547,6 +1558,7 @@ fn spawn_reconnect(shared: &Arc<Shared>) {
     tokio::spawn(async move {
         let mut backoff: HashMap<String, (Instant, Duration)> = HashMap::new();
         let mut down_since: HashMap<String, Instant> = HashMap::new();
+        let mut last_addr: HashMap<String, String> = HashMap::new();
         let mut timer = tokio::time::interval(Duration::from_millis(500));
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -1574,9 +1586,15 @@ fn spawn_reconnect(shared: &Arc<Shared>) {
                 .unwrap_or_default();
             backoff.retain(|id, _| shared.pins.contains(id));
             down_since.retain(|id, _| shared.pins.contains(id));
+            last_addr.retain(|id, _| shared.pins.contains(id));
             for peer in peers {
                 if !shared.pins.contains(&peer.device_id) || shared.link.connected(&peer.device_id)
                 {
+                    // Remember where a live peer really is: the paired address goes stale when its IP
+                    // changes, and mDNS can miss it, so redialing the old address never recovers.
+                    if let Ok(session) = shared.link.session(&peer.device_id) {
+                        last_addr.insert(peer.device_id.clone(), session.peer.address.clone());
+                    }
                     backoff.remove(&peer.device_id);
                     down_since.remove(&peer.device_id);
                     continue;
@@ -1599,6 +1617,7 @@ fn spawn_reconnect(shared: &Arc<Shared>) {
                 let address = mutex(&shared.discovered)
                     .ok()
                     .and_then(|d| d.get(&peer.device_id).map(|d| d.address.clone()))
+                    .or_else(|| last_addr.get(&peer.device_id).cloned())
                     .or(peer.address);
                 let Some(address) = address else {
                     continue;
