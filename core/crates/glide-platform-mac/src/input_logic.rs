@@ -204,6 +204,11 @@ const MODIFIERS: [(u64, u64); 8] = [
     (CMD, 0x10),
 ];
 
+/// Which modifier keys (HID 0xE0..=0xE7) could be down under these system flags; a key whose group flag is clear is up.
+pub(crate) fn modifiers_maybe_down(flags: u64) -> [bool; 8] {
+    std::array::from_fn(|index| flags & MODIFIERS[index].0 != 0)
+}
+
 pub(crate) fn modifier_down(hid: u16, flags: u64, previous: bool) -> Option<bool> {
     if hid == 0x39 {
         return Some(flags & CAPS != 0);
@@ -479,6 +484,19 @@ impl MovePacer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_clear_modifier_group_flag_means_both_sides_are_up() {
+        assert_eq!(modifiers_maybe_down(0), [false; 8]);
+        assert_eq!(
+            modifiers_maybe_down(CTRL | 0x1),
+            [true, false, false, false, true, false, false, false]
+        );
+        assert_eq!(
+            modifiers_maybe_down(SHIFT | CMD | CAPS),
+            [false, true, false, true, false, true, false, true]
+        );
+    }
 
     #[test]
     fn physical_tables_cover_ansi_iso_jis_without_aliasing_special_keys() {
