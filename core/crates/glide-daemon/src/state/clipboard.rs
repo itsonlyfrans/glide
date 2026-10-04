@@ -626,10 +626,15 @@ impl Core {
                         self.clipboard.last_local = Instant::now() - LOCAL_INTERVAL;
                     }
                     Ok(Ok((ClipboardPublish::ReplacedLocalChange { .. }, _, _))) => {
+                        tracing::info!(
+                            "received clipboard dropped: this computer's clipboard changed first"
+                        );
                         self.clipboard.received_leases.clear();
                         self.clipboard.active_file_marker = None;
                     }
-                    Ok(Ok((ClipboardPublish::Revoked, _, _))) => {}
+                    Ok(Ok((ClipboardPublish::Revoked, _, _))) => {
+                        tracing::info!("received clipboard dropped: no longer allowed");
+                    }
                     Ok(Ok((
                         ClipboardPublish::PartialFailure { cleared, .. },
                         received,
@@ -644,13 +649,17 @@ impl Core {
                             }
                             self.clipboard.active_file_marker = Some(marker);
                         }
+                        tracing::info!("received clipboard could not be written by the system");
                         self.clipboard_notice(
                             "The operating system could not finish the clipboard update.",
                         );
                     }
-                    _ => self.clipboard_notice(
-                        "The operating system rejected a completed clipboard update.",
-                    ),
+                    _ => {
+                        tracing::info!("received clipboard was rejected by the system");
+                        self.clipboard_notice(
+                            "The operating system rejected a completed clipboard update.",
+                        );
+                    }
                 }
                 self.clipboard.revoke_admission();
             }
@@ -1206,7 +1215,7 @@ impl Core {
         transfer.state = TransferState::Failed;
         transfer.error = Some(body.to_owned());
         let _ = self.update_transfer(transfer);
-        tracing::info!("clipboard transfer failed");
+        tracing::info!("clipboard file transfer failed");
     }
 
     fn start_native_send(&mut self, peer: &str, fetch: wire::ClipFetch) -> Result<(), IpcError> {
@@ -1447,7 +1456,7 @@ impl Core {
                         || matches!(&content.data, ClipboardData::Files(files) if files.sensitivity.should_exclude())
                 }))
         {
-            tracing::info!("clipboard not shared: it is marked sensitive");
+            tracing::info!("clipboard not shared: marked sensitive");
             self.clipboard.outgoing = None;
             return;
         }
@@ -1489,6 +1498,9 @@ impl Core {
                                 || !names.insert(entry.name.to_lowercase())
                         })
                     {
+                        tracing::info!(
+                            "clipboard files not shared: unsupported or duplicate names"
+                        );
                         self.clipboard_notice(
                             "The clipboard file list contains unsupported names or duplicates.",
                         );
@@ -1754,6 +1766,7 @@ impl Core {
                         })
                     });
                 if !valid {
+                    tracing::info!("clipboard offer ignored: invalid or turned off here");
                     return Ok(());
                 }
                 self.discard_incoming_clipboard();
@@ -1801,7 +1814,7 @@ impl Core {
                 if native_pending {
                     if self.clipboard.file_engine.is_none() || self.clipboard.native_link.is_none()
                     {
-                        tracing::info!("native clipboard transfer unavailable on connection");
+                        tracing::info!("clipboard files not fetched: transfer link unavailable");
                         self.discard_incoming_clipboard();
                     } else {
                         let clip_id = self.clipboard.version.2.clone();
