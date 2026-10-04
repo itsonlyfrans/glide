@@ -907,7 +907,7 @@ impl Core {
         };
         let Some(engine) = self.clipboard.file_engine.clone() else {
             streams.handle.cancel();
-            tracing::debug!("native clipboard transfer unavailable on connection");
+            tracing::info!("native clipboard transfer unavailable on connection");
             self.send_clip_failure(&peer, &clip_id);
             return;
         };
@@ -1206,7 +1206,7 @@ impl Core {
         transfer.state = TransferState::Failed;
         transfer.error = Some(body.to_owned());
         let _ = self.update_transfer(transfer);
-        tracing::debug!("clipboard transfer failed");
+        tracing::info!("clipboard transfer failed");
     }
 
     fn start_native_send(&mut self, peer: &str, fetch: wire::ClipFetch) -> Result<(), IpcError> {
@@ -1275,7 +1275,7 @@ impl Core {
             .insert(rate_key, Instant::now());
         if self.clipboard.pending_native_sends.len() >= 8 {
             self.send_clip_failure(peer, &fetch.clip_id);
-            tracing::debug!("clipboard transfer queue full");
+            tracing::info!("clipboard transfer queue full");
             return Ok(());
         }
         if active_probe && !probe {
@@ -1447,6 +1447,7 @@ impl Core {
                         || matches!(&content.data, ClipboardData::Files(files) if files.sensitivity.should_exclude())
                 }))
         {
+            tracing::info!("clipboard not shared: it is marked sensitive");
             self.clipboard.outgoing = None;
             return;
         }
@@ -1464,6 +1465,7 @@ impl Core {
             })
             .collect::<Vec<_>>();
         if contents.is_empty() {
+            tracing::info!("clipboard not shared: no format that is switched on");
             self.clipboard.outgoing = None;
             return;
         }
@@ -1799,7 +1801,7 @@ impl Core {
                 if native_pending {
                     if self.clipboard.file_engine.is_none() || self.clipboard.native_link.is_none()
                     {
-                        tracing::debug!("native clipboard transfer unavailable on connection");
+                        tracing::info!("native clipboard transfer unavailable on connection");
                         self.discard_incoming_clipboard();
                     } else {
                         let clip_id = self.clipboard.version.2.clone();
@@ -1856,7 +1858,7 @@ impl Core {
                     .is_some_and(|c| c.peer == peer && c.announcement.clip_id == failure.clip_id)
                 {
                     self.discard_incoming_clipboard();
-                    tracing::debug!("peer could not provide clipboard contents");
+                    tracing::info!("peer could not provide clipboard contents");
                 }
             }
             ClipboardMessage::ClipFetch(fetch) => self.start_native_send(peer, fetch)?,
