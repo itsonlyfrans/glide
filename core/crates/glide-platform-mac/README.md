@@ -62,7 +62,7 @@ cargo check -p glide-platform-mac --target x86_64-apple-darwin --offline --locke
 changeCount, then rejects raced reads. `publish_snapshot` prepares one
 NSPasteboardItem with every representation and commits with one writeObjects call
 after change-token/admission checks. Partial native write failure is explicit.
-Files include real local public.file-url plus NSFilenamesPboardType for the complete
-ordered list in that one item; both forms are accepted on read. No delayed provider
+Files are published as one pasteboard item per file, each with a real local public.file-url
+(the legacy NSFilenamesPboardType is not a valid UTI and macOS rejects it). No delayed provider
 is installed. Finder/native-app compatibility remains a manual Mac acceptance check
 in MANUAL_TEST.md. LaunchAgent arguments now include --headless before --data-dir.
