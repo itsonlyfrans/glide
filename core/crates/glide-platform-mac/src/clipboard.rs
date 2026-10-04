@@ -1030,6 +1030,7 @@ fn publish_bundle(
     admission: ClipboardAdmission,
 ) -> Result<ClipboardPublish, BackendError> {
     let item = NSPasteboardItem::new();
+    let mut extra_items = Vec::new();
     for content in contents {
         if content.sensitivity.should_exclude() {
             return Err(BackendError::InvalidInput(
@@ -1049,29 +1050,34 @@ fn publish_bundle(
                         "invalid clipboard file count".into(),
                     ));
                 }
-                let mut paths = Vec::with_capacity(files.entries.len());
+                // One public.file-url per pasteboard item: the first rides on the
+                // primary item, the rest get items of their own. The legacy
+                // NSFilenamesPboardType is not a UTI, so macOS refuses it on an item.
                 for (index, entry) in files.entries.iter().enumerate() {
-                    let (path, url) = prepare_file_url(entry)?;
-                    if index == 0 && !item.setString_forType(&url, ns_string!("public.file-url")) {
+                    let (_, url) = prepare_file_url(entry)?;
+                    let target = if index == 0 {
+                        item.clone()
+                    } else {
+                        let extra = NSPasteboardItem::new();
+                        extra_items.push(extra.clone());
+                        extra
+                    };
+                    if !target.setString_forType(&url, ns_string!("public.file-url")) {
                         return Err(BackendError::Unavailable);
                     }
-                    paths.push(path);
-                }
-                let paths = NSArray::from_retained_slice(&paths);
-                // SAFETY: a filenames pasteboard property list is an NSArray of
-                // NSString absolute paths; each element was validated above.
-                if !unsafe {
-                    item.setPropertyList_forType(&paths, ns_string!("NSFilenamesPboardType"))
-                } {
-                    return Err(BackendError::Unavailable);
                 }
             }
         }
     }
-    if !set_marker(&item, marker) {
+    if !set_marker(&item, marker) || !extra_items.iter().all(|extra| set_marker(extra, marker)) {
         return Err(BackendError::Unavailable);
     }
-    let objects = NSArray::from_retained_slice(&[ProtocolObject::from_retained(item.clone())]);
+    let objects = NSArray::from_retained_slice(
+        &std::iter::once(&item)
+            .chain(extra_items.iter())
+            .map(|item| ProtocolObject::from_retained(item.clone()))
+            .collect::<Vec<_>>(),
+    );
     let actual = ClipboardChangeToken(state.pasteboard.changeCount() as u64);
     if actual != expected {
         return Ok(ClipboardPublish::ReplacedLocalChange {
@@ -1111,7 +1117,7 @@ fn publish_bundle(
         marker,
         count,
         primary: Some(item),
-        files: Vec::new(),
+        files: extra_items,
     });
     Ok(ClipboardPublish::Published {
         change_token: ClipboardChangeToken(count as u64),
@@ -1141,7 +1147,19 @@ fn read_files(state: &WorkerState) -> Result<Option<FileList>, BackendError> {
         let mut paths = Vec::new();
         for index in 0..items.count() {
             let item = items.objectAtIndex(index);
-            if let Some(list) = item.propertyListForType(ns_string!("NSFilenamesPboardType")) {
+            // Modern file URLs first: asking for the legacy filenames type logs an
+            // "invalid UTI" warning from AppKit on every read.
+            if let Some(url) = item.stringForType(ns_string!("public.file-url")) {
+                if url.length() > MAX_FILE_URL_UNITS {
+                    return Err(BackendError::InvalidInput(
+                        "clipboard file URL too long".into(),
+                    ));
+                }
+                paths.push(file_url_to_path(&url.to_string()).ok_or_else(|| {
+                    BackendError::InvalidInput("invalid clipboard file URL".into())
+                })?);
+            } else if let Some(list) = item.propertyListForType(ns_string!("NSFilenamesPboardType"))
+            {
                 let list = list.downcast_ref::<NSArray<AnyObject>>().ok_or_else(|| {
                     BackendError::InvalidInput("invalid filenames property list".into())
                 })?;
@@ -1166,15 +1184,6 @@ fn read_files(state: &WorkerState) -> Result<Option<FileList>, BackendError> {
                     }
                     paths.push(path);
                 }
-            } else if let Some(url) = item.stringForType(ns_string!("public.file-url")) {
-                if url.length() > MAX_FILE_URL_UNITS {
-                    return Err(BackendError::InvalidInput(
-                        "clipboard file URL too long".into(),
-                    ));
-                }
-                paths.push(file_url_to_path(&url.to_string()).ok_or_else(|| {
-                    BackendError::InvalidInput("invalid clipboard file URL".into())
-                })?);
             }
             if paths.len() > MAX_NATIVE_ITEMS {
                 return Err(BackendError::InvalidInput(
