@@ -1168,6 +1168,21 @@ impl Core {
                         glide_xfer::Error::DiskSpace | glide_xfer::Error::Storage(_)
                     ) || (job_transfer.direction == TransferDirection::Send
                         && matches!(&error, glide_xfer::Error::Limit(_)));
+                    if let glide_xfer::Error::Storage(io) = &error {
+                        // Only the kind of failure is logged (never a path or OS message).
+                        match io.kind() {
+                            std::io::ErrorKind::PermissionDenied => tracing::info!(
+                                "clipboard transfer storage failed: permission denied"
+                            ),
+                            std::io::ErrorKind::NotFound => tracing::info!(
+                                "clipboard transfer storage failed: folder or file missing"
+                            ),
+                            std::io::ErrorKind::AlreadyExists => {
+                                tracing::info!("clipboard transfer storage failed: already exists")
+                            }
+                            _ => tracing::info!("clipboard transfer storage failed: other"),
+                        }
+                    }
                     let body = match error {
                         glide_xfer::Error::Limit(_) => {
                             "The clipboard transfer exceeds Glide's size limit."

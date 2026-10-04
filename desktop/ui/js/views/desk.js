@@ -141,6 +141,7 @@ export function mountDesk(root) {
   let tf = { s: 0.1, ox: 0, oy: 0 };   // world → screen
   let fitScale = 0.1;                  // the scale "Center view" uses; zoom is limited around it
   let dragging = null;
+  let moreOpen = false; // the inspector is rebuilt on every state update; remember whether "More details" was open
   let panning = null;
   let frame = 0, framePaint = false, frameFull = false;
   // Redraw at most once per display frame, however many pointer or wheel events arrive in between.
@@ -326,14 +327,19 @@ export function mountDesk(root) {
     dragging = { d, moved: false };
     paint(store.state); placeGroupButton();
     const others = list.filter((o) => o !== d);
+    let ended = false;
     const move = (ev) => {
+      // A release that never reached us (focus change, capture lost) would leave the computer glued to the cursor.
+      if (ev.buttons === 0) { up(); return; }
       const dx = (ev.clientX - start.px) / tf.s, dy = (ev.clientY - start.py) / tf.s;
       if (Math.abs(dx * tf.s) + Math.abs(dy * tf.s) > 3) dragging.moved = true;
       const r = snapDevice(d, { x: start.x + dx, y: start.y + dy }, others, SNAP_PX / tf.s);
       d.x = r.x; d.y = r.y; schedule(false);
     };
     const up = async () => {
-      el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
+      if (ended) return;
+      ended = true;
+      el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); el.removeEventListener('lostpointercapture', up);
       const moved = dragging.moved; dragging = null;
       paint(store.state); placeGroupButton();
       if (!moved) return;
@@ -343,7 +349,7 @@ export function mountDesk(root) {
       // The view stays exactly where the person put it (they can pan, zoom or use Center view).
       settle(); place(); paint(store.state);
     };
-    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); el.addEventListener('lostpointercapture', up);
   }
 
   // Move one screen on its own. On this computer the engine stores the arrangement; for another computer the
@@ -362,7 +368,9 @@ export function mountDesk(root) {
       ...d.mons.filter((_, j) => j !== index).map((o) => ({ x: d.x + o.x, y: d.y + o.y, w: o.w, h: o.h })),
       ...list.filter((o) => o !== d).flatMap((o) => absMons(o)),
     ];
+    let ended = false;
     const move = (ev) => {
+      if (ev.buttons === 0) { up(); return; }
       const dx = (ev.clientX - start.px) / tf.s, dy = (ev.clientY - start.py) / tf.s;
       if (Math.abs(dx * tf.s) + Math.abs(dy * tf.s) > 3) dragging.moved = true;
       const r = snapRect({ x: d.x + start.x + dx, y: d.y + start.y + dy, w: m.w, h: m.h }, others, SNAP_PX / tf.s);
@@ -370,7 +378,9 @@ export function mountDesk(root) {
       schedule(false);
     };
     const up = async () => {
-      monEl.removeEventListener('pointermove', move); monEl.removeEventListener('pointerup', up); monEl.removeEventListener('pointercancel', up);
+      if (ended) return;
+      ended = true;
+      monEl.removeEventListener('pointermove', move); monEl.removeEventListener('pointerup', up); monEl.removeEventListener('pointercancel', up); monEl.removeEventListener('lostpointercapture', up);
       monEl.classList.remove('lifted');
       const moved = dragging.moved; dragging = null;
       paint(store.state); placeGroupButton();
@@ -387,7 +397,7 @@ export function mountDesk(root) {
       }
       settle(); place(); paint(store.state);
     };
-    monEl.addEventListener('pointermove', move); monEl.addEventListener('pointerup', up); monEl.addEventListener('pointercancel', up);
+    monEl.addEventListener('pointermove', move); monEl.addEventListener('pointerup', up); monEl.addEventListener('pointercancel', up); monEl.addEventListener('lostpointercapture', up);
   }
 
   function renderInspector(state) {
@@ -464,7 +474,7 @@ export function mountDesk(root) {
       dev.address ? [h('dt', null, 'Address'), h('dd', null, dev.address)] : null,
       (dev.app_version ?? dev.version) ? [h('dt', null, 'Glide'), h('dd', null, dev.app_version ?? dev.version)] : null,
       h('dt', null, 'Fingerprint'), h('dd', { class: 'fp' }, dev.fingerprint));
-    inspector.append(h('details', { class: 'more' }, h('summary', null, 'More details'), facts,
+    inspector.append(h('details', { class: 'more', open: moreOpen, ontoggle: (e) => { moreOpen = e.target.open; } }, h('summary', null, 'More details'), facts,
       d.self ? null : h('button', { class: 'btn sm danger', onclick: async () => {
         const yes = await confirmModal({ title: `Unpair ${dev.name}?`, body: 'It will stop receiving your keyboard, mouse and clipboard, and must be paired again with a new code.', confirm: 'Unpair', danger: true });
         if (!yes) return;
@@ -497,6 +507,7 @@ export function mountDesk(root) {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!panning) return;
+    if (e.buttons === 0) { endPan(); return; }
     const dx = e.clientX - panning.px, dy = e.clientY - panning.py;
     if (Math.abs(dx) + Math.abs(dy) > 3) panning.moved = true;
     tf.ox = panning.ox + dx; tf.oy = panning.oy + dy;
@@ -511,6 +522,7 @@ export function mountDesk(root) {
   };
   canvas.addEventListener('pointerup', endPan);
   canvas.addEventListener('pointercancel', endPan);
+  canvas.addEventListener('lostpointercapture', endPan);
 
   // Pinch (trackpad), Ctrl/Cmd + wheel, or a plain mouse wheel zooms around the pointer; two-finger scrolling pans.
   wrap.addEventListener('wheel', (e) => {
