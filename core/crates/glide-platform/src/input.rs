@@ -341,6 +341,12 @@ pub struct MoveTimings {
     pub wait_us: Vec<u32>,
     /// Microseconds the operating system took to accept each move.
     pub post_us: Vec<u32>,
+    /// Microseconds playback ran behind the other computer, sampled at each arriving move.
+    pub playback_us: Vec<u32>,
+    /// Display frames spent catching up after a network stall.
+    pub catchup_frames: u64,
+    /// Times the cursor jumped straight to the newest position.
+    pub jumps: u64,
 }
 
 /// Native input capture and event injection.

@@ -858,8 +858,24 @@ impl Context {
             }
             let pending = self.pacer.pending();
             self.run_frames(pending);
+            self.note_pacer(true);
         } else {
             let _ = self.inject(event.kind);
+        }
+    }
+
+    /// Hand what the pacer did to the cursor report.
+    fn note_pacer(&mut self, arrival: bool) {
+        let stats = std::mem::take(&mut self.pacer.stats);
+        if let Ok(mut timing) = self.moves.timing.lock() {
+            timing.1.catchup_frames += stats.catchup_frames;
+            timing.1.jumps += stats.jumps;
+            if arrival {
+                record(
+                    &mut timing.1.playback_us,
+                    Duration::from_secs_f64(self.pacer.delay()),
+                );
+            }
         }
     }
 
@@ -875,6 +891,7 @@ impl Context {
         if !self.pacer.pending() {
             self.run_frames(false);
         }
+        self.note_pacer(false);
     }
 
     /// Before a click or key, put the cursor exactly where the other computer last aimed.
@@ -887,6 +904,7 @@ impl Context {
             });
         }
         self.run_frames(false);
+        self.note_pacer(false);
     }
 
     fn run_frames(&mut self, on: bool) {

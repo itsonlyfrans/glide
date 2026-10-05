@@ -389,8 +389,19 @@ pub(crate) struct MovePacer {
     /// The timeline moment the cursor is showing, and when it was last updated (local).
     shown_t: f64,
     last_tick: f64,
-    last_arrival: Option<f64>,
     max_delay: f64,
+    /// For the cursor report.
+    pub(crate) stats: PacerStats,
+}
+
+/// What the pacer did, for the cursor report.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PacerStats {
+    /// Display frames spent catching up after a stall (playing faster than real time).
+    pub(crate) catchup_frames: u64,
+    /// Times the cursor jumped to the newest position: before a click or key, or when the other computer's clock
+    /// restarted.
+    pub(crate) jumps: u64,
 }
 
 /// After a pause this long, the next move is a fresh start and is posted at once (seconds).
@@ -428,8 +439,8 @@ impl MovePacer {
             render: None,
             shown_t: 0.0,
             last_tick: 0.0,
-            last_arrival: None,
             max_delay,
+            stats: PacerStats::default(),
         }
     }
 
@@ -457,7 +468,6 @@ impl MovePacer {
             // No timing (an older Glide on the other side): post it as it comes.
             self.samples.clear();
             self.render = None;
-            self.last_arrival = Some(local);
             return self.jump(p);
         };
         let offset = local - made;
@@ -466,6 +476,9 @@ impl MovePacer {
                 (base + BASE_DRIFT * (local - self.base_at).max(0.0)).min(offset)
             }
             _ => {
+                if self.base.is_some() {
+                    self.stats.jumps += 1;
+                }
                 self.delay = 0.0;
                 self.render = None;
                 self.samples.clear();
@@ -479,9 +492,12 @@ impl MovePacer {
         self.delay = (late + DELAY_MARGIN).max(kept).min(self.max_delay);
         self.delay_at = local;
 
-        let fresh =
-            self.last_arrival.is_none_or(|last| local - last > IDLE_GAP) || self.samples.is_empty();
-        self.last_arrival = Some(local);
+        // A fresh start is a pause of the hand on the other computer, not a pause of the network: after a Wi-Fi
+        // stall the moves made meanwhile are still played (quickly), never skipped in one jump.
+        let fresh = self
+            .samples
+            .back()
+            .is_none_or(|(last, _)| made - last > IDLE_GAP);
         if fresh {
             // The cursor was resting: start right away from here.
             self.samples.clear();
@@ -530,7 +546,11 @@ impl MovePacer {
         let mut at = self.render.map_or(target, |render| render.max(target));
         // Behind after a stall: speed up for a moment rather than leap.
         let step = (local - self.last_tick).clamp(0.0, 2.0 * FRAME);
-        at = at.min(self.shown_t + CATCHUP * step).max(self.shown_t);
+        let limit = self.shown_t + CATCHUP * step;
+        if at > limit && self.samples.len() > 1 {
+            self.stats.catchup_frames += 1;
+        }
+        at = at.min(limit).max(self.shown_t);
         self.render = Some(at);
         self.last_tick = local;
         while self.samples.len() > 1 && self.samples[1].0 <= at {
@@ -559,6 +579,9 @@ impl MovePacer {
     /// Jump to the newest position now (before a click, so it lands exactly where the other computer aimed).
     pub(crate) fn flush(&mut self) -> Option<Point> {
         let &(t, p) = self.samples.back()?;
+        if self.shown != Some(p) {
+            self.stats.jumps += 1;
+        }
         self.samples.clear();
         self.samples.push_back((t, p));
         self.render = Some(self.render.map_or(t, |render| render.max(t)));
@@ -566,10 +589,18 @@ impl MovePacer {
         self.jump(p)
     }
 
+    /// How far behind playback runs now (seconds), for the cursor report.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn delay(&self) -> f64 {
+        self.delay
+    }
+
     /// Forget everything (control left this computer).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn reset(&mut self) {
+        let stats = std::mem::take(&mut self.stats);
         *self = Self::with_max_delay(self.max_delay);
+        self.stats = stats;
     }
 }
 
@@ -883,6 +914,38 @@ mod tests {
         // Without timing (an older Glide sends the moves) every move is posted as it comes.
         assert_eq!(pacer.arrive(p(30.0), None, at(541.0)), Some(p(30.0)));
         assert!(!pacer.pending());
+    }
+
+    // Bug: a Wi-Fi stall longer than a hand's pause (here 240 ms) mid-drag made the cursor teleport, because it was
+    // taken for a fresh start. The moves made during the stall must be played back, quickly but continuously.
+    #[test]
+    fn a_long_network_stall_mid_motion_never_teleports() {
+        let mut pacer = MovePacer::new();
+        let arrivals: Vec<_> = (0..600)
+            .map(|t| {
+                let t = f64::from(t);
+                let arrived = if (200.0..440.0).contains(&t) {
+                    440.0
+                } else {
+                    t + 0.3
+                };
+                (arrived, t, t)
+            })
+            .collect();
+        let posted = play(&mut pacer, &arrivals, 640.0);
+        let mut last: Option<(f64, f64)> = None;
+        for (t, x) in posted {
+            if let Some((lt, lx)) = last {
+                assert!(
+                    x - lx <= CATCHUP * FRAME * 1000.0 * 2.0 + 1.0,
+                    "jumped {} px at {t} ms (from {lt} ms)",
+                    x - lx
+                );
+            }
+            last = Some((t, x));
+        }
+        assert_eq!(pacer.stats.jumps, 0);
+        assert!(pacer.stats.catchup_frames > 0);
     }
 
     // A long Wi-Fi stall is not hidden by lagging further: playback never runs more than the limit behind.

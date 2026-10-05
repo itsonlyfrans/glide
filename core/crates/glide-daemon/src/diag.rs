@@ -96,8 +96,12 @@ impl CursorDiag {
         self.platform.replaced += timings.replaced;
         self.platform.wait_us.extend(timings.wait_us);
         self.platform.post_us.extend(timings.post_us);
+        self.platform.playback_us.extend(timings.playback_us);
+        self.platform.catchup_frames += timings.catchup_frames;
+        self.platform.jumps += timings.jumps;
         keep_last(&mut self.platform.wait_us);
         keep_last(&mut self.platform.post_us);
+        keep_last(&mut self.platform.playback_us);
     }
 
     /// A plain-text report to copy and share. Numbers first, then what they suggest.
@@ -239,6 +243,22 @@ impl CursorDiag {
                 out,
                 "  moves skipped because a newer one was already waiting: {replaced:.1}%"
             );
+            if !self.platform.playback_us.is_empty() {
+                let behind = us_to_ms(&self.platform.playback_us);
+                let _ = writeln!(
+                    out,
+                    "  smoothing runs behind the other computer by: median {:.1} ms, 90% under {:.1} ms, most {:.1} ms",
+                    percentile(&behind, 0.5),
+                    percentile(&behind, 0.9),
+                    percentile(&behind, 1.0)
+                );
+                let _ = writeln!(
+                    out,
+                    "  catching up after a network stall: {:.1} s; jumps to the newest position: {}",
+                    self.platform.catchup_frames as f64 / 240.0,
+                    self.platform.jumps
+                );
+            }
             if percentile(&wait, 0.99) > 4.0 || percentile(&post, 0.99) > 4.0 {
                 hints.push(
                     "This computer is slow to apply cursor moves (it is busy), which adds delay after they arrive."
