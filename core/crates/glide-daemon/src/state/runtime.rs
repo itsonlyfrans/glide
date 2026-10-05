@@ -237,6 +237,10 @@ impl Core {
         }
         self.move_seq = Some(movement.seq);
         self.diag.received(Instant::now());
+        // When it was made on the other computer, so the move can be replayed at the pace it was made.
+        self.platform
+            .input_backend()
+            .note_move_made(movement.made_micros());
         let position = Point {
             x: movement.x,
             y: movement.y,
@@ -542,7 +546,7 @@ impl Core {
                     },
                 );
                 if let Some((target, pos)) = self.engine.forwarded_position() {
-                    self.outgoing_seq = self.outgoing_seq.wrapping_add(1);
+                    self.outgoing_seq = next_move_seq(self.outgoing_seq, self.move_clock);
                     match self.link.peer_token(target) {
                         Ok(token) => {
                             self.pending_move = Some((
@@ -1829,6 +1833,13 @@ impl Core {
     }
 }
 
+/// The next outgoing sequence number for a cursor move: also the moment the move was made, so the other computer can
+/// replay moves at their real pace however unevenly the network delivers them.
+fn next_move_seq(previous: u64, clock: Instant) -> u64 {
+    let micros = clock.elapsed().as_micros() as u64 & (wire::MOVE_TIMED - 1);
+    (wire::MOVE_TIMED | micros).max(previous.wrapping_add(1))
+}
+
 fn newer(seq: u64, previous: Option<u64>) -> bool {
     previous.is_none_or(|previous| seq != previous && seq.wrapping_sub(previous) < (1 << 63))
 }
@@ -1862,6 +1873,41 @@ fn monitor_at(monitors: &[glide_platform::Monitor], p: Point) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Moves carry the moment they were made so the receiver can replay them evenly. The stamp must stay a valid,
+    // strictly increasing sequence number for every receiver, including after keys and heartbeats share the counter.
+    #[test]
+    fn move_sequence_numbers_carry_when_the_move_was_made() {
+        let clock = Instant::now() - Duration::from_millis(250);
+        let first = next_move_seq(7, clock);
+        let made = wire::Move {
+            seq: first,
+            x: 0.0,
+            y: 0.0,
+        }
+        .made_micros()
+        .expect("timed");
+        assert!((250_000..10_000_000).contains(&made), "made at {made} us");
+        assert!(
+            newer(first, Some(7)),
+            "an older Glide still accepts it after its counted moves"
+        );
+        let second = next_move_seq(first, clock);
+        assert!(second > first && newer(second, Some(first)));
+        // Two moves in the same microsecond, or a key that bumped the shared counter, still increase.
+        let bumped = second.wrapping_add(3);
+        assert!(next_move_seq(bumped, clock) > bumped);
+        assert_eq!(
+            wire::Move {
+                seq: 41,
+                x: 0.0,
+                y: 0.0
+            }
+            .made_micros(),
+            None,
+            "older senders: no timing"
+        );
+    }
 
     #[test]
     fn administrator_warning_is_once_per_minute_even_across_sessions() {

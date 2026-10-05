@@ -353,6 +353,10 @@ pub trait InputBackend: Send + Sync {
     /// Smooth remote cursor moves that arrive in bursts (macOS only; elsewhere moves are always posted at once).
     fn set_move_smoothing(&self, _on: bool) {}
 
+    /// The next injected cursor move was made at this moment on the other computer (microseconds on its own clock), so
+    /// it can be played back at the pace it was made (macOS only).
+    fn note_move_made(&self, _micros: Option<u64>) {}
+
     /// Timings recorded since the last call (and cleared), for the cursor report.
     fn take_move_timings(&self) -> Option<MoveTimings> {
         None

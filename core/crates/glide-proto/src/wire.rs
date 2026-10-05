@@ -324,6 +324,17 @@ pub struct Move {
     pub y: f64,
 }
 
+/// Marks a move sequence number that is also the moment the move was made: this bit plus microseconds on the sender's
+/// own clock. Still strictly increasing, so a receiver that only orders moves by `seq` is unaffected.
+pub const MOVE_TIMED: u64 = 1 << 62;
+
+impl Move {
+    /// When the move was made, in microseconds on the sender's clock, if the sender said so.
+    pub fn made_micros(&self) -> Option<u64> {
+        (self.seq & MOVE_TIMED != 0).then_some(self.seq & (MOVE_TIMED - 1))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClipboardMessage {
     ClipAnnounce(ClipAnnounce),

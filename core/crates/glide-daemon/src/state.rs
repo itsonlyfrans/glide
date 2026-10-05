@@ -106,6 +106,8 @@ pub struct Core {
     cursor_hidden_peer: Option<(String, Instant)>,
     cursor_restore_pending: bool,
     outgoing_seq: u64,
+    /// The clock outgoing cursor moves are stamped with.
+    move_clock: Instant,
     outgoing_epoch: u64,
     pending_move: Option<(glide_net::PeerToken, glide_proto::wire::Move)>,
     pending_pairings: HashMap<String, Peer>,
@@ -384,6 +386,7 @@ impl Core {
             cursor_hidden_peer: None,
             cursor_restore_pending,
             outgoing_seq: 0,
+            move_clock: Instant::now(),
             outgoing_epoch: 0,
             pending_move: None,
             pending_pairings: HashMap::new(),

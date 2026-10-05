@@ -15,7 +15,7 @@ use std::{
     ffi::c_void,
     ptr::{self, NonNull},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -168,7 +168,10 @@ impl Drop for Wake {
 /// The newest pending cursor move. Moves never queue behind each other: when the Mac is busy the input thread jumps
 /// straight to the latest position and skips the ones in between, so load can make the cursor coarser but never late.
 struct MoveSlot {
-    latest: Mutex<Option<InputEvent>>,
+    /// The newest move, and when it was made on the other computer (microseconds on its clock).
+    latest: Mutex<Option<(InputEvent, Option<u64>)>>,
+    /// When the next stored move was made (`u64::MAX`: unknown).
+    next_made: AtomicU64,
     queued: AtomicBool,
     /// Smooth bursts of moves (Settings: "Smooth cursor over Wi-Fi").
     smooth: AtomicBool,
@@ -271,6 +274,7 @@ impl MacInput {
         let secure_thread = secure.clone();
         let moves = Arc::new(MoveSlot {
             latest: Mutex::new(None),
+            next_made: AtomicU64::new(u64::MAX),
             queued: AtomicBool::new(false),
             smooth: AtomicBool::new(true),
             timing: Mutex::new((None, glide_platform::MoveTimings::default())),
@@ -330,12 +334,14 @@ impl MacInput {
     /// Store the newest cursor position and make sure exactly one `Move` command is waiting. Never waits for the input
     /// thread: under load, older positions are overwritten instead of building a backlog.
     fn inject_move(&self, event: InputEvent) -> Result<(), BackendError> {
+        let made =
+            Some(self.moves.next_made.swap(u64::MAX, Ordering::AcqRel)).filter(|m| *m != u64::MAX);
         let replaced = self
             .moves
             .latest
             .lock()
             .map_err(|_| BackendError::StateUnavailable)?
-            .replace(event)
+            .replace((event, made))
             .is_some();
         if let Ok(mut timing) = self.moves.timing.lock() {
             if replaced {
@@ -387,6 +393,12 @@ impl MacInput {
 impl InputBackend for MacInput {
     fn set_move_smoothing(&self, on: bool) {
         self.moves.smooth.store(on, Ordering::Release);
+    }
+
+    fn note_move_made(&self, micros: Option<u64>) {
+        self.moves
+            .next_made
+            .store(micros.unwrap_or(u64::MAX), Ordering::Release);
     }
 
     fn take_move_timings(&self) -> Option<glide_platform::MoveTimings> {
@@ -820,7 +832,7 @@ impl Context {
             .lock()
             .ok()
             .and_then(|mut slot| slot.take());
-        let Some(event) = latest else {
+        let Some((event, made)) = latest else {
             return;
         };
         if let Ok(mut timing) = self.moves.timing.lock() {
@@ -829,22 +841,23 @@ impl Context {
             }
         }
         if let InputEventKind::PointerMoved { position, .. } = event.kind {
-            if !self.moves.smooth.load(Ordering::Acquire) {
-                self.pacer.reset();
-                self.run_frames(false);
-                let _ = self.inject(event.kind);
-                return;
+            // Played back at the pace the moves were made; how far behind it may run depends on the setting.
+            self.pacer
+                .set_max_delay(if self.moves.smooth.load(Ordering::Acquire) {
+                    SMOOTH_DELAY
+                } else {
+                    TIGHT_DELAY
+                });
+            let made = made.map(|micros| micros as f64 / 1_000_000.0);
+            if let Some(now) = self.pacer.arrive(position, made, Instant::now()) {
+                let _ = self.inject(InputEventKind::PointerMoved {
+                    position: now,
+                    delta_x: 0.0,
+                    delta_y: 0.0,
+                });
             }
-            match self.pacer.arrive(position, Instant::now()) {
-                Some(now) => {
-                    let _ = self.inject(InputEventKind::PointerMoved {
-                        position: now,
-                        delta_x: 0.0,
-                        delta_y: 0.0,
-                    });
-                }
-                None => self.run_frames(true),
-            }
+            let pending = self.pacer.pending();
+            self.run_frames(pending);
         } else {
             let _ = self.inject(event.kind);
         }

@@ -367,117 +367,209 @@ pub(crate) fn is_release(kind: InputEventKind) -> bool {
     )
 }
 
-/// Smooths remote cursor moves that arrive in clumps. Wi-Fi often delivers a stream of small mouse packets in bursts
-/// every 10-30 ms; posting each burst as one jump makes a 120 Hz screen look like it runs at 40 Hz. When moves arrive
-/// steadily they are posted at once, exactly as before. When they arrive in bursts, the cursor glides at a steady speed
-/// to the newest position over the following display frames, so motion stays fluid at the cost of a few milliseconds.
+/// Replays remote cursor moves at the pace they were made. Wi-Fi (and a busy network) delivers mouse packets in clumps
+/// with gaps of 10-250 ms; posting each clump as one jump makes the cursor stall and then leap. Every move carries the
+/// time it was made on the other computer, so the moves are played back on that timeline, a little behind: only as
+/// far behind as recent clumps require (about nothing on a cable, more on Wi-Fi), never more than `max_delay`.
 pub(crate) struct MovePacer {
-    target: Option<Point>,
+    /// Local clock origin for the arithmetic below.
+    epoch: std::time::Instant,
+    /// Moves not yet fully played: (time made on the other computer, position), oldest first. The first one is the
+    /// point the cursor is travelling from.
+    samples: std::collections::VecDeque<(f64, Point)>,
     shown: Option<Point>,
-    last_arrival: Option<std::time::Instant>,
-    /// The glide in progress: where it started, when, and how long it takes (seconds).
-    from: Point,
-    started: Option<std::time::Instant>,
-    length: f64,
-    /// The largest recent gap between arrivals, slowly forgotten (seconds).
-    burst_gap: f64,
+    /// Smallest recent (arrival - made) difference: the clock offset plus the fastest delivery.
+    base: Option<f64>,
+    base_at: f64,
+    /// How far behind playback runs, and when it was last updated.
+    delay: f64,
+    delay_at: f64,
+    /// Playback position on the other computer's timeline; it never runs backwards.
+    render: Option<f64>,
+    /// The timeline moment the cursor is showing, and when it was last updated (local).
+    shown_t: f64,
+    last_tick: f64,
+    last_arrival: Option<f64>,
+    max_delay: f64,
 }
 
-/// Moves that keep arriving at least this often need no smoothing (seconds).
-const STEADY_GAP: f64 = 0.006;
-/// Never glide for longer than this, so the cursor can not feel heavy (seconds). One 120 Hz frame: a busy Mac sees
-/// bigger bursts, and a longer glide there made the cursor feel delayed.
-const MAX_GLIDE: f64 = 0.008;
 /// After a pause this long, the next move is a fresh start and is posted at once (seconds).
 const IDLE_GAP: f64 = 0.12;
+/// Headroom on top of the latest delivery delay (seconds).
+const DELAY_MARGIN: f64 = 0.002;
+/// How quickly a clump is forgotten once delivery is steady again (seconds).
+const DELAY_FORGET: f64 = 2.0;
+/// How fast the fastest-delivery estimate may rise, so clock drift and route changes are followed (seconds per second).
+const BASE_DRIFT: f64 = 0.002;
+/// A larger jump means the other computer's clock restarted: start the estimate over (seconds).
+const RESYNC: f64 = 1.0;
+/// After a stall, play back at most this many times faster than real time to catch up, instead of leaping.
+const CATCHUP: f64 = 4.0;
+/// One 240 Hz display frame (seconds).
+const FRAME: f64 = 1.0 / 240.0;
+/// Playback limit with smoothing on (Wi-Fi) and off (seconds).
+pub(crate) const SMOOTH_DELAY: f64 = 0.05;
+pub(crate) const TIGHT_DELAY: f64 = 0.012;
 
 impl MovePacer {
     pub(crate) fn new() -> Self {
+        Self::with_max_delay(SMOOTH_DELAY)
+    }
+
+    pub(crate) fn with_max_delay(max_delay: f64) -> Self {
         Self {
-            target: None,
+            epoch: std::time::Instant::now(),
+            samples: std::collections::VecDeque::new(),
             shown: None,
+            base: None,
+            base_at: 0.0,
+            delay: 0.0,
+            delay_at: 0.0,
+            render: None,
+            shown_t: 0.0,
+            last_tick: 0.0,
             last_arrival: None,
-            from: Point { x: 0.0, y: 0.0 },
-            started: None,
-            length: 0.0,
-            burst_gap: 0.0,
+            max_delay,
         }
     }
 
-    /// A new position arrived. Returns the point to post right away, or `None` when frame ticks will glide to it.
-    pub(crate) fn arrive(&mut self, p: Point, now: std::time::Instant) -> Option<Point> {
-        let gap = self
-            .last_arrival
-            .map(|last| now.saturating_duration_since(last).as_secs_f64());
-        self.last_arrival = Some(now);
-        self.target = Some(p);
-        let Some(gap) = gap.filter(|gap| *gap < IDLE_GAP) else {
-            self.burst_gap = 0.0;
+    /// Limit how far behind playback may run (smoothing on or off).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn set_max_delay(&mut self, max_delay: f64) {
+        self.max_delay = max_delay;
+        self.delay = self.delay.min(max_delay);
+    }
+
+    fn local(&self, now: std::time::Instant) -> f64 {
+        now.saturating_duration_since(self.epoch).as_secs_f64()
+    }
+
+    /// A new position arrived, made at `made` seconds on the other computer's clock (when known). Returns the point to
+    /// post right away, if any; display-frame ticks play the rest while `pending()`.
+    pub(crate) fn arrive(
+        &mut self,
+        p: Point,
+        made: Option<f64>,
+        now: std::time::Instant,
+    ) -> Option<Point> {
+        let local = self.local(now);
+        let Some(made) = made.filter(|t| t.is_finite()) else {
+            // No timing (an older Glide on the other side): post it as it comes.
+            self.samples.clear();
+            self.render = None;
+            self.last_arrival = Some(local);
             return self.jump(p);
         };
-        // Remember the biggest recent gap; forget it over about a quarter of a second of steady arrivals.
-        self.burst_gap = gap.max(self.burst_gap * (-gap / 0.25).exp());
-        let Some(shown) = self.shown else {
-            return self.jump(p);
+        let offset = local - made;
+        let base = match self.base {
+            Some(base) if offset - base < RESYNC && base - offset < RESYNC => {
+                (base + BASE_DRIFT * (local - self.base_at).max(0.0)).min(offset)
+            }
+            _ => {
+                self.delay = 0.0;
+                self.render = None;
+                self.samples.clear();
+                offset
+            }
         };
-        if self.burst_gap <= STEADY_GAP {
+        self.base = Some(base);
+        self.base_at = local;
+        let late = offset - base;
+        let kept = self.delay * (-(local - self.delay_at).max(0.0) / DELAY_FORGET).exp();
+        self.delay = (late + DELAY_MARGIN).max(kept).min(self.max_delay);
+        self.delay_at = local;
+
+        let fresh =
+            self.last_arrival.is_none_or(|last| local - last > IDLE_GAP) || self.samples.is_empty();
+        self.last_arrival = Some(local);
+        if fresh {
+            // The cursor was resting: start right away from here.
+            self.samples.clear();
+            self.samples.push_back((made, p));
+            self.render = Some(made);
+            self.shown_t = made;
+            self.last_tick = local;
             return self.jump(p);
         }
-        self.from = shown;
-        self.started = Some(now);
-        self.length = (self.burst_gap * 0.5).min(MAX_GLIDE);
-        None
+        if self.samples.back().is_some_and(|(t, _)| made <= *t) {
+            // Out of order or a duplicate: the newest position wins, at the newest time.
+            if let Some(last) = self.samples.back_mut() {
+                last.1 = p;
+            }
+        } else {
+            self.samples.push_back((made, p));
+        }
+        // A clump of moves arrives at once: post at most once per display frame, the frame timer does the rest.
+        if local - self.last_tick >= FRAME {
+            self.tick(now)
+        } else {
+            None
+        }
     }
 
     fn jump(&mut self, p: Point) -> Option<Point> {
+        let changed = self.shown != Some(p);
         self.shown = Some(p);
-        self.started = None;
-        Some(p)
+        changed.then_some(p)
     }
 
     /// Whether display-frame ticks are still needed.
     pub(crate) fn pending(&self) -> bool {
-        matches!((self.shown, self.target), (Some(a), Some(b)) if a != b)
+        self.samples.len() > 1
+            || self
+                .samples
+                .front()
+                .is_some_and(|(_, p)| self.shown != Some(*p))
     }
 
-    /// One display frame: the next point to post, if the cursor is still on its way.
+    /// One display frame: the next point to post, if the cursor moved.
     pub(crate) fn tick(&mut self, now: std::time::Instant) -> Option<Point> {
-        let target = self.target?;
-        if !self.pending() {
-            return None;
+        let base = self.base?;
+        let local = self.local(now);
+        let target = local - base - self.delay;
+        let mut at = self.render.map_or(target, |render| render.max(target));
+        // Behind after a stall: speed up for a moment rather than leap.
+        let step = (local - self.last_tick).clamp(0.0, 2.0 * FRAME);
+        at = at.min(self.shown_t + CATCHUP * step).max(self.shown_t);
+        self.render = Some(at);
+        self.last_tick = local;
+        while self.samples.len() > 1 && self.samples[1].0 <= at {
+            self.samples.pop_front();
         }
-        let Some(started) = self.started else {
-            return self.jump(target);
+        let (from_t, from) = *self.samples.front()?;
+        let next = match self.samples.get(1) {
+            Some(&(to_t, to)) if at > from_t => {
+                let k = ((at - from_t) / (to_t - from_t)).clamp(0.0, 1.0);
+                Point {
+                    x: from.x + (to.x - from.x) * k,
+                    y: from.y + (to.y - from.y) * k,
+                }
+            }
+            Some(_) => self.shown.unwrap_or(from),
+            None => from,
         };
-        let progress = if self.length <= 0.0 {
-            1.0
+        self.shown_t = if self.samples.len() > 1 {
+            at
         } else {
-            (now.saturating_duration_since(started).as_secs_f64() / self.length).min(1.0)
+            at.min(from_t)
         };
-        if progress >= 1.0 {
-            return self.jump(target);
-        }
-        let next = Point {
-            x: self.from.x + (target.x - self.from.x) * progress,
-            y: self.from.y + (target.y - self.from.y) * progress,
-        };
-        self.shown = Some(next);
-        Some(next)
+        self.jump(next)
     }
 
     /// Jump to the newest position now (before a click, so it lands exactly where the other computer aimed).
     pub(crate) fn flush(&mut self) -> Option<Point> {
-        let target = self.target?;
-        if !self.pending() {
-            return None;
-        }
-        self.jump(target)
+        let &(t, p) = self.samples.back()?;
+        self.samples.clear();
+        self.samples.push_back((t, p));
+        self.render = Some(self.render.map_or(t, |render| render.max(t)));
+        self.shown_t = t;
+        self.jump(p)
     }
 
     /// Forget everything (control left this computer).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn reset(&mut self) {
-        *self = Self::new();
+        *self = Self::with_max_delay(self.max_delay);
     }
 }
 
@@ -691,85 +783,138 @@ mod tests {
         }));
     }
 
-    // Bug: on a MacBook over Wi-Fi the remote cursor looked like it ran at a low frame rate, because moves that
-    // arrived in bursts were posted as single jumps.
-    #[test]
-    fn bursty_moves_are_eased_over_display_frames_and_steady_moves_post_at_once() {
-        use std::time::{Duration, Instant};
-        let start = Instant::now();
+    // Plays a stream of moves (arrived ms, made ms, x) through the pacer with 240 Hz display frames and returns the
+    // posted x positions with their local times (ms).
+    fn play(pacer: &mut MovePacer, arrivals: &[(f64, f64, f64)], until: f64) -> Vec<(f64, f64)> {
+        use std::time::Duration;
+        let start = pacer.epoch;
         let at = |ms: f64| start + Duration::from_secs_f64(ms / 1000.0);
-        let p = |x: f64| Point { x, y: 100.0 };
-
-        // Steady 1 ms arrivals (a wired network): every move is posted immediately.
-        let mut pacer = MovePacer::new();
-        for i in 0..50 {
-            let x = f64::from(i);
-            assert_eq!(pacer.arrive(p(x), at(x)), Some(p(x)));
-        }
-        assert!(!pacer.pending());
-
-        // Bursts every 24 ms, each jumping 48 px: after the first burst, jumps are eased over several frames.
-        let mut pacer = MovePacer::new();
-        let mut eased = Vec::new();
-        for burst in 0..6 {
-            let t = f64::from(burst) * 24.0;
-            let x = f64::from(burst) * 48.0;
-            if pacer.arrive(p(x), at(t)).is_none() {
-                for frame in 1..=5 {
-                    if let Some(step) = pacer.tick(at(t + f64::from(frame) * 4.0)) {
-                        eased.push(step.x);
-                    }
+        let mut posted = Vec::new();
+        let mut next = 0;
+        let mut frame = 0.0;
+        while frame <= until {
+            while next < arrivals.len() && arrivals[next].0 <= frame {
+                let (arrived, made, x) = arrivals[next];
+                if let Some(p) = pacer.arrive(Point { x, y: 0.0 }, Some(made / 1000.0), at(arrived))
+                {
+                    posted.push((arrived, p.x));
+                }
+                next += 1;
+            }
+            if pacer.pending() {
+                if let Some(p) = pacer.tick(at(frame)) {
+                    posted.push((frame, p.x));
                 }
             }
+            frame += 1000.0 / 240.0;
         }
-        assert!(
-            eased.len() >= 8,
-            "the cursor moves on several frames between bursts: {eased:?}"
-        );
-        assert!(
-            eased.windows(2).all(|w| w[1] >= w[0]),
-            "always moving forward: {eased:?}"
-        );
-
-        // A click snaps to the exact newest position first.
-        pacer.arrive(p(1000.0), at(150.0));
-        assert_eq!(pacer.flush(), Some(p(1000.0)));
-        assert!(!pacer.pending());
-
-        // After a pause the next move is a fresh start and is posted at once.
-        assert_eq!(pacer.arrive(p(5.0), at(600.0)), Some(p(5.0)));
+        posted
     }
 
-    // The easing must never make the cursor trail far behind: it catches up within a few frames.
+    // Bug: on a MacBook over Wi-Fi the remote cursor stalled and leapt, because moves that arrived in clumps were
+    // posted as single jumps. A steady 1 px/ms drag delivered in 30 ms clumps must come out as steady motion.
     #[test]
-    fn eased_cursor_catches_up_within_a_few_frames() {
-        use std::time::{Duration, Instant};
-        let start = Instant::now();
-        let at = |ms: f64| start + Duration::from_secs_f64(ms / 1000.0);
+    fn moves_delivered_in_clumps_play_back_at_the_pace_they_were_made() {
         let mut pacer = MovePacer::new();
-        pacer.arrive(Point { x: 0.0, y: 0.0 }, at(0.0));
-        pacer.arrive(Point { x: 1.0, y: 0.0 }, at(30.0));
-        assert!(pacer.arrive(Point { x: 200.0, y: 0.0 }, at(31.0)).is_none());
-        let mut last = None;
-        for frame in 1..=12 {
-            if let Some(step) = pacer.tick(at(31.0 + f64::from(frame) * 4.17)) {
-                last = Some(step);
-            }
+        // Made every 1 ms (x = t); the network holds them and hands over each 30 ms batch at once.
+        let arrivals: Vec<_> = (0..300)
+            .map(|t| {
+                let t = f64::from(t);
+                let arrived = (t / 30.0).ceil() * 30.0 + 0.5;
+                (arrived, t, t)
+            })
+            .collect();
+        let posted = play(&mut pacer, &arrivals, 400.0);
+        // Once the pacer has seen a clump, the cursor moves on every frame, never backwards, and never by much more
+        // than one frame's worth of motion.
+        let settled: Vec<_> = posted
+            .iter()
+            .copied()
+            .filter(|(t, _)| *t > 90.0 && *t < 290.0)
+            .collect();
+        assert!(
+            settled.len() > 40,
+            "moved on most frames: {}",
+            settled.len()
+        );
+        for pair in settled.windows(2) {
+            let step = pair[1].1 - pair[0].1;
+            assert!(step >= 0.0, "never backwards: {pair:?}");
+            assert!(step <= 9.0, "no leaps: {pair:?}");
         }
+        // And it does not trail far behind the hand.
+        let (t, x) = *settled.last().expect("moves");
+        assert!(t - x <= SMOOTH_DELAY * 1000.0 + 31.0, "lag {} ms", t - x);
         assert_eq!(
-            last,
-            Some(Point { x: 200.0, y: 0.0 }),
-            "arrived within 50 ms"
+            posted.last().map(|p| p.1),
+            Some(299.0),
+            "ends exactly where aimed"
         );
-        // Never more than one 120 Hz frame behind: a busy Mac must not make the cursor feel delayed.
+    }
+
+    // On a cable moves arrive as they are made; they must be posted at once, with no added delay.
+    #[test]
+    fn steady_moves_post_at_once() {
         let mut pacer = MovePacer::new();
-        pacer.arrive(Point { x: 0.0, y: 0.0 }, at(0.0));
-        pacer.arrive(Point { x: 1.0, y: 0.0 }, at(60.0));
-        assert!(pacer.arrive(Point { x: 300.0, y: 0.0 }, at(61.0)).is_none());
-        assert_eq!(
-            pacer.tick(at(61.0 + 8.5)),
-            Some(Point { x: 300.0, y: 0.0 }),
-            "caught up after 8 ms"
-        );
+        let arrivals: Vec<_> = (0..100)
+            .map(|t| (f64::from(t) + 0.3, f64::from(t), f64::from(t)))
+            .collect();
+        let posted = play(&mut pacer, &arrivals, 120.0);
+        assert!(!posted.is_empty());
+        for (t, x) in posted {
+            assert!(t - x <= 4.5 + DELAY_MARGIN * 1000.0, "posted {x} at {t} ms");
+        }
+    }
+
+    // A click snaps to the exact newest position first, and after a pause the next move is posted at once.
+    #[test]
+    fn clicks_flush_and_a_fresh_start_is_immediate() {
+        use std::time::Duration;
+        let mut pacer = MovePacer::new();
+        let start = pacer.epoch;
+        let at = |ms: f64| start + Duration::from_secs_f64(ms / 1000.0);
+        let p = |x: f64| Point { x, y: 0.0 };
+        assert_eq!(pacer.arrive(p(0.0), Some(0.0), at(0.0)), Some(p(0.0)));
+        pacer.arrive(p(10.0), Some(0.010), at(40.0));
+        pacer.arrive(p(20.0), Some(0.020), at(40.0));
+        assert_eq!(pacer.flush(), Some(p(20.0)));
+        assert!(!pacer.pending());
+        assert_eq!(pacer.arrive(p(25.0), Some(0.5), at(540.0)), Some(p(25.0)));
+        // Without timing (an older Glide sends the moves) every move is posted as it comes.
+        assert_eq!(pacer.arrive(p(30.0), None, at(541.0)), Some(p(30.0)));
+        assert!(!pacer.pending());
+    }
+
+    // A long Wi-Fi stall is not hidden by lagging further: playback never runs more than the limit behind.
+    #[test]
+    fn playback_never_lags_more_than_the_limit() {
+        let mut pacer = MovePacer::with_max_delay(TIGHT_DELAY);
+        // Delivered on time, then one 200 ms stall, then on time again. Playback catches up (faster than real time
+        // for a moment, not in one leap) and is soon back within the limit.
+        let arrivals: Vec<_> = (0..500)
+            .map(|t| {
+                let t = f64::from(t);
+                let arrived = if (100.0..300.0).contains(&t) {
+                    300.0
+                } else {
+                    t + 0.2
+                };
+                (arrived, t, t)
+            })
+            .collect();
+        let posted = play(&mut pacer, &arrivals, 520.0);
+        let after: Vec<_> = posted
+            .iter()
+            .copied()
+            .filter(|(t, _)| *t > 380.0 && *t < 495.0)
+            .collect();
+        assert!(!after.is_empty());
+        for (t, x) in after {
+            assert!(
+                t - x <= TIGHT_DELAY * 1000.0 + 5.0,
+                "lag {} ms at {t}",
+                t - x
+            );
+        }
     }
 }
