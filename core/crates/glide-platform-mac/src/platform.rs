@@ -31,6 +31,7 @@ pub struct MacPlatform {
 impl MacPlatform {
     /// Initializes the native input and clipboard backends.
     pub fn new() -> Result<Self, BackendError> {
+        keep_responsive();
         Ok(Self {
             input: crate::input::MacInput::new()?,
             clipboard: crate::clipboard::MacClipboard::new()?,
@@ -495,4 +496,21 @@ fn map_io_error(error: std::io::Error) -> BackendError {
     } else {
         BackendError::Unavailable
     }
+}
+
+/// Glide runs in the background, so macOS treats it as idle: App Nap and timer coalescing then delay its wake-ups by
+/// 10 ms and more, which made remote cursor moves wait before they were applied. Declare latency-critical, user-initiated
+/// work for the life of the process (the computer may still go to sleep).
+fn keep_responsive() {
+    use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+            NSActivityOptions::UserInitiatedAllowingIdleSystemSleep
+                | NSActivityOptions::LatencyCritical,
+            &NSString::from_str("Sharing the keyboard and mouse"),
+        );
+        // Ending the activity would let macOS throttle Glide again; keep it until the process exits.
+        std::mem::forget(activity);
+    });
 }
