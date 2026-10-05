@@ -649,6 +649,9 @@ struct Context {
     mouse_valid: bool,
     clicks: [Click; 32],
     clock: Instant,
+    /// Whether macOS lets Glide post events, refreshed four times a second. Asking macOS on every cursor step is an
+    /// IPC round trip per call and made remote moves queue up behind each other.
+    post_granted: bool,
     /// Smooths remote moves that arrive in bursts; `frames` is the display-rate timer that drives it while gliding.
     pacer: MovePacer,
     frames: Handle,
@@ -922,12 +925,27 @@ impl Context {
     }
 
     fn inject(&mut self, kind: InputEventKind) -> Result<(), BackendError> {
-        if permissions().injection != PermissionStatus::Granted {
+        // Cursor steps (up to 240 a second) use the permission and Secure Input state the safety timer refreshes four
+        // times a second; keys, buttons and wheel ask macOS live.
+        let is_move = matches!(kind, InputEventKind::PointerMoved { .. });
+        let granted = |context: &Self| {
+            if is_move {
+                context.post_granted
+            } else {
+                permissions().injection == PermissionStatus::Granted
+            }
+        };
+        if !granted(self) {
             return Err(BackendError::PermissionDenied);
         }
         // Secure Input blocks safe local takeover. Stop new remote input, but still permit
         // the release guard to clear already-held keys/buttons while posting remains granted.
-        if secure_input() && !is_release(kind) {
+        let secure = if is_move {
+            self.secure.load(Ordering::Acquire)
+        } else {
+            secure_input()
+        };
+        if secure && !is_release(kind) {
             return Err(BackendError::Unavailable);
         }
         if matches!(kind, InputEventKind::PointerMoved { .. }) && self.dirty.load(Ordering::Acquire)
@@ -1126,7 +1144,7 @@ impl Context {
                 record(&mut timing.1.post_us, posting.elapsed());
             }
         }
-        let posting_granted = permissions().injection == PermissionStatus::Granted;
+        let posting_granted = granted(self);
         // Posting has no delivery result. If TCC changed during a release, conservatively
         // retain the held state for retry; a newly posted press must still be tracked.
         if posting_granted || !is_release(kind) {
@@ -1497,7 +1515,11 @@ fn process_commands(context: &mut Context) {
                 .set_visible(visible, &context.displays[..context.count])
                 .map(|_| Reply::Unit),
             Command::Inject(event) => {
-                context.settle_moves();
+                // A click must land exactly where the other computer aimed; keys and scrolling need not, so they no
+                // longer snap a gliding cursor ahead (that jump looked like a glitch when typing, e.g. Shift+Enter).
+                if matches!(event.kind, InputEventKind::Button { .. }) {
+                    context.settle_moves();
+                }
                 context.inject(event.kind).map(|_| Reply::Unit)
             }
             Command::Release => {
@@ -1557,10 +1579,11 @@ fn safety_tick(context: &mut Context) {
     if context.secure.swap(secure, Ordering::AcqRel) != secure {
         let _ = context.status.try_send(CaptureStatus::SecureInput(secure));
     }
+    let grant = permissions();
+    context.post_granted = grant.injection == PermissionStatus::Granted;
     if secure {
         context.fallback(CaptureFallback::SecureInput);
     } else {
-        let grant = permissions();
         if grant.input_monitoring != PermissionStatus::Granted
             || grant.accessibility != PermissionStatus::Granted
         {
@@ -1661,6 +1684,7 @@ fn run(
         mouse_valid: false,
         clicks: [Click::default(); 32],
         clock: Instant::now(),
+        post_granted: permissions().injection == PermissionStatus::Granted,
         pacer: MovePacer::new(),
         frames: ptr::null_mut(),
     });

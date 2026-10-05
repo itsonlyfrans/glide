@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "glide-desktop"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "gethostname",
  "serde",
