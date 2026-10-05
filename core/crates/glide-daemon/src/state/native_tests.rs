@@ -918,10 +918,14 @@ async fn native_repeated_reconnects_do_not_exhaust_accept_queue() {
                         .tick()
                         .await
                         .expect("acceptor disconnect tick");
+                    // The dialer's automatic redial can restore the session before the acceptor
+                    // notices the close, so "gone" means the old session's token is gone.
                     let dialer_disconnected =
-                        dialer.lock().await.link().peer_token(&acceptor_id).is_err();
+                        dialer.lock().await.link().peer_token(&acceptor_id).ok()
+                            != Some(dialer_token);
                     let acceptor_disconnected =
-                        acceptor.lock().await.link().peer_token(&dialer_id).is_err();
+                        acceptor.lock().await.link().peer_token(&dialer_id).ok()
+                            != Some(acceptor_token);
                     if dialer_disconnected && acceptor_disconnected {
                         break;
                     }
