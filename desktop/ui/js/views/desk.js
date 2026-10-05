@@ -221,9 +221,11 @@ export function mountDesk(root) {
       let el = seamPool[n];
       if (!el) { el = h('i', { class: 'seam' }); seamPool.push(el); world.append(el); }
       el.style.display = '';
+      // Screens are drawn 3 px short of their right and bottom edges; the line sits in that gap, between the two
+      // screens, so it never covers a laptop's frame or a monitor's border.
       Object.assign(el.style, {
-        left: `${sm.x * s - (sm.w === 0 ? 1.5 : 0)}px`, top: `${sm.y * s - (sm.h === 0 ? 1.5 : 0)}px`,
-        width: `${sm.w === 0 ? 3 : sm.w * s}px`, height: `${sm.h === 0 ? 3 : sm.h * s}px`,
+        left: `${sm.x * s - (sm.w === 0 ? 2.5 : 0)}px`, top: `${sm.y * s - (sm.h === 0 ? 2.5 : 0)}px`,
+        width: `${sm.w === 0 ? 2 : Math.max(0, sm.w * s - 3)}px`, height: `${sm.h === 0 ? 2 : Math.max(0, sm.h * s - 3)}px`,
       });
       n++;
     }

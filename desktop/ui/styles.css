@@ -224,7 +224,7 @@ kbd {
 /* Small screens drop the logo first; the size stays readable as long as there is room for it. */
 @container (max-height: 88px) { .mon .glyph { display: none; } }
 @container (max-height: 38px) { .mon .sub, .mon .num { display: none; } }
-.seam { position: absolute; background: var(--here); opacity: .8; border-radius: 2px; box-shadow: 0 0 8px rgba(255, 255, 255, .45); pointer-events: none; z-index: 3; }
+.seam { position: absolute; background: var(--here); opacity: .9; border-radius: 1px; box-shadow: 0 0 4px rgba(255, 255, 255, .35); pointer-events: none; z-index: 3; }
 
 .welcome { position: absolute; left: 50%; top: 22px; transform: translateX(-50%); width: min(460px, calc(100% - 48px)); padding: 24px 26px; border-radius: 14px; background: color-mix(in srgb, var(--raise) 92%, transparent); border: 1px solid var(--line); box-shadow: 0 24px 60px rgba(0, 0, 0, .4); z-index: 3; }
 .welcome h2 { font: 600 22px/1.2 var(--display); margin: 0 0 10px; }
