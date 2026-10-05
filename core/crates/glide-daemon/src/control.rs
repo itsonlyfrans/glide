@@ -29,6 +29,8 @@ const REJECT_DELAY: Duration = Duration::from_millis(250);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(2);
 const WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 const OUTBOUND_BYTES: usize = 2 * ipc::MAX_IPC_LINE_BYTES;
+const UPDATE_CHECK_FIRST: Duration = Duration::from_secs(120);
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 #[derive(Serialize, Deserialize)]
 pub struct Metadata {
@@ -310,6 +312,22 @@ impl Client {
             .is_ok()
     }
 }
+/// Start the Glide app detached and without a console window.
+fn launch_ui(ui: &Path, args: &[&str]) -> io::Result<()> {
+    let mut command = std::process::Command::new(ui);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    command.spawn().map(drop)
+}
+
 fn ui_clients(clients: &HashMap<u64, Client>) -> usize {
     clients
         .values()
@@ -539,6 +557,11 @@ pub async fn serve(core: Core, mut instance: Instance) -> anyhow::Result<()> {
     let mut pending: HashMap<u64, (u64, u64, bool)> = HashMap::new();
     let mut next_request = 1u64;
     let mut tray_active = tray.is_some();
+    let mut update_checks = tokio::time::interval_at(
+        tokio::time::Instant::now() + UPDATE_CHECK_FIRST,
+        UPDATE_CHECK_EVERY,
+    );
+    update_checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let result = async {
         loop {
             let message = tokio::select! {
@@ -546,16 +569,19 @@ pub async fn serve(core: Core, mut instance: Instance) -> anyhow::Result<()> {
                 failure = &mut accepting => {
                     match failure { Ok(Err(error)) => return Err(error.into()), Err(error) => return Err(error.into()), Ok(Ok(())) => return Err(io::Error::other("control listener stopped").into()) }
                 }
+                // Windows: the window usually is not open, so start Glide now and then just to look for updates.
+                _ = update_checks.tick(), if tray_active && ui_path.is_some() => {
+                    if let Some(ui) = &ui_path {
+                        if launch_ui(ui, &["--check-update"]).is_err() { tracing::warn!("could not check for updates"); }
+                    }
+                    continue;
+                }
                 action = tray_actions.recv(), if tray_active => {
                     let Some(action) = action else { tray_active = false; continue; };
                     let (method, params) = match action {
                         tray::TrayAction::Open => {
                             if let Some(ui) = &ui_path {
-                                let mut command = std::process::Command::new(ui);
-                                command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-                                #[cfg(windows)]
-                                { use std::os::windows::process::CommandExt; command.creation_flags(0x0800_0000); }
-                                if command.spawn().is_err() { tracing::warn!("could not open Glide window"); }
+                                if launch_ui(ui, &[]).is_err() { tracing::warn!("could not open Glide window"); }
                             }
                             continue;
                         },

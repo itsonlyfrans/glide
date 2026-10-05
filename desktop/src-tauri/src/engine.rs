@@ -258,12 +258,22 @@ impl Engine {
                     tauri::async_runtime::spawn(async move { me.start().await });
                 }
             } else {
-                let reason = self.last_reason();
-                let message = match reason {
-                    Some(reason) => format!("The Glide engine keeps stopping. Its last message was: {reason}"),
-                    None => "The Glide engine keeps stopping.".to_string(),
-                };
-                (self.events)("engine.fatal", json!({ "message": message }));
+                if attempt == 6 {
+                    let reason = self.last_reason();
+                    let message = match reason {
+                        Some(reason) => format!("The Glide engine keeps stopping. Its last message was: {reason}"),
+                        None => "The Glide engine keeps stopping.".to_string(),
+                    };
+                    (self.events)("engine.fatal", json!({ "message": message }));
+                }
+                // Whatever stopped it (a locked or sleeping Mac, a permission being re-granted) often clears up by
+                // itself, so keep trying quietly; a start that works clears the message.
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                let idle = self.conn.lock().unwrap_or_else(|p| p.into_inner()).is_none();
+                if idle && !self.closing.load(Ordering::Acquire) && !self.replacing.load(Ordering::Acquire) {
+                    let me = self.clone();
+                    tauri::async_runtime::spawn(async move { me.start().await });
+                }
             }
         }
     }

@@ -75,6 +75,8 @@ extern "C" {
     fn CGEventSetLocation(event: Handle, position: CGPoint);
     fn CGEventPost(location: u32, event: Handle);
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGGetOnlineDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayMirrorsDisplay(display: u32) -> u32;
     fn CGDisplayBounds(display: u32) -> CGRect;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayCopyDisplayMode(display: u32) -> Handle;
@@ -1151,44 +1153,73 @@ impl Drop for Context {
 }
 
 fn displays() -> Result<([DisplayRect; MAX_DISPLAYS], usize), BackendError> {
+    // Sleeping displays (screen saver, display sleep, a locked Mac) drop out of the active list but stay online.
+    // Falling back to them keeps the layout readable, so the engine can start and keep running meanwhile.
+    display_list(CGGetActiveDisplayList, false)
+        .or_else(|_| display_list(CGGetOnlineDisplayList, true))
+}
+
+fn display_list(
+    list: unsafe extern "C" fn(u32, *mut u32, *mut u32) -> i32,
+    skip_unreadable: bool,
+) -> Result<([DisplayRect; MAX_DISPLAYS], usize), BackendError> {
     let mut ids = [0; MAX_DISPLAYS + 1];
-    let mut count = 0;
-    // SAFETY: ids has capacity for exactly the supplied bound, count is a writable u32.
-    if unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut count) } != 0
-        || count == 0
-        || count as usize > MAX_DISPLAYS
+    let mut found = 0;
+    // SAFETY: ids has capacity for exactly the supplied bound, found is a writable u32.
+    if unsafe { list(ids.len() as u32, ids.as_mut_ptr(), &mut found) } != 0
+        || found == 0
+        || found as usize > MAX_DISPLAYS
     {
         return Err(BackendError::Unavailable);
     }
     let mut result = [DisplayRect::default(); MAX_DISPLAYS];
-    for (index, &id) in ids[..count as usize].iter().enumerate() {
-        // SAFETY: id came from Quartz; mode uses Copy rule and is owned until its values are read.
-        let (bounds, mode) = unsafe {
-            (
-                CGDisplayBounds(id),
-                OwnedCf::new(CGDisplayCopyDisplayMode(id))?,
-            )
-        };
-        // SAFETY: live non-null display mode, read-only queries.
-        let (logical, physical) = unsafe {
-            (
-                CGDisplayModeGetWidth(mode.raw()),
-                CGDisplayModeGetPixelWidth(mode.raw()),
-            )
-        };
-        if logical == 0 {
-            return Err(BackendError::Unavailable);
+    let mut count = 0;
+    for &id in &ids[..found as usize] {
+        // SAFETY: id came from Quartz; a mirror's own bounds duplicate its source, so only sources count.
+        if skip_unreadable && unsafe { CGDisplayMirrorsDisplay(id) } != 0 {
+            continue;
         }
-        result[index] = DisplayRect {
-            id,
-            x: bounds.origin.x,
-            y: bounds.origin.y,
-            w: bounds.size.width,
-            h: bounds.size.height,
-            scale: physical as f64 / logical as f64,
-        };
+        match display_rect(id) {
+            Ok(rect) => {
+                result[count] = rect;
+                count += 1;
+            }
+            Err(_) if skip_unreadable => {}
+            Err(error) => return Err(error),
+        }
     }
-    Ok((result, count as usize))
+    if count == 0 {
+        return Err(BackendError::Unavailable);
+    }
+    Ok((result, count))
+}
+
+fn display_rect(id: u32) -> Result<DisplayRect, BackendError> {
+    // SAFETY: id came from Quartz; mode uses Copy rule and is owned until its values are read.
+    let (bounds, mode) = unsafe {
+        (
+            CGDisplayBounds(id),
+            OwnedCf::new(CGDisplayCopyDisplayMode(id))?,
+        )
+    };
+    // SAFETY: live non-null display mode, read-only queries.
+    let (logical, physical) = unsafe {
+        (
+            CGDisplayModeGetWidth(mode.raw()),
+            CGDisplayModeGetPixelWidth(mode.raw()),
+        )
+    };
+    if logical == 0 || bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {
+        return Err(BackendError::Unavailable);
+    }
+    Ok(DisplayRect {
+        id,
+        x: bounds.origin.x,
+        y: bounds.origin.y,
+        w: bounds.size.width,
+        h: bounds.size.height,
+        scale: physical as f64 / logical as f64,
+    })
 }
 
 extern "C" fn tap_callback(_: Handle, kind: u32, event: Handle, info: Handle) -> Handle {

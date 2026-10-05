@@ -479,32 +479,57 @@ fn schedule_update_checks(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(20)).await;
         loop {
-            if let Ok(updater) = app.updater() {
-                if let Ok(Some(update)) = updater.check().await {
-                    let version = update.version.clone();
-                    *lock(&app.state::<Shared>().update) = Some(update);
-                    let _ = app.emit_to(
-                        "main",
-                        "glide:event",
-                        json!({ "name": "update.available", "data": { "version": version } }),
-                    );
-                }
-            }
+            check_and_announce(&app).await;
             tokio::time::sleep(UPDATE_CHECK_EVERY).await;
         }
     });
+}
+
+/// Look for an update; if there is one, tell the window and, once per version, the person.
+async fn check_and_announce(app: &AppHandle) -> bool {
+    let Ok(updater) = app.updater() else { return false };
+    let Ok(Some(update)) = updater.check().await else { return false };
+    let version = update.version.clone();
+    *lock(&app.state::<Shared>().update) = Some(update);
+    let _ = app.emit_to("main", "glide:event", json!({ "name": "update.available", "data": { "version": version } }));
+    announce_update(app, &version);
+    true
+}
+
+/// A system notification for a new version, shown once per version so it never nags.
+fn announce_update(app: &AppHandle, version: &str) {
+    let marker = app.state::<Shared>().data_root.join("update-announced");
+    if std::fs::read_to_string(&marker).is_ok_and(|seen| seen.trim() == version) {
+        return;
+    }
+    let shown = app
+        .notification()
+        .builder()
+        .title(format!("Glide {version} is available"))
+        .body("Open Glide and choose Update to install it. It takes a few seconds.")
+        .show();
+    if shown.is_ok() {
+        let _ = std::fs::write(&marker, version);
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ main
 
 fn main() {
     let hidden = std::env::args().any(|a| a == "--hidden");
+    // Windows: the engine starts Glide this way now and then, so updates are found while no window is open.
+    let check_only = std::env::args().any(|a| a == "--check-update");
     let mock = std::env::var_os("GLIDE_MOCK").is_some();
     let mut builder = tauri::Builder::default();
     // One Glide per computer, except a test copy on the simulated engine, which must not hand over to (or block) the
     // installed Glide someone is using.
     if !mock {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_window(app)));
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // A running Glide checks for updates itself; only a real "open Glide" brings the window up.
+            if !args.iter().any(|a| a == "--check-update") {
+                show_window(app);
+            }
+        }));
     }
     builder
         .plugin(tauri_plugin_notification::init())
@@ -565,6 +590,15 @@ fn main() {
                 login_item: Mutex::new(None),
                 update: Mutex::new(None),
             });
+
+            if check_only {
+                let checker = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    check_and_announce(&checker).await;
+                    checker.exit(0);
+                });
+                return Ok(());
+            }
 
             #[cfg(target_os = "macos")]
             tray::create(&handle)?;
