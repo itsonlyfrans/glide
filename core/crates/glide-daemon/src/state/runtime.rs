@@ -802,6 +802,27 @@ impl Core {
                 "remote_leave" | "peer_left" => {
                     tracing::info!("cursor returned: the other computer handed it back")
                 }
+                "receiver_timeout_or_permission" => {
+                    tracing::info!("cursor returned: the other computer stopped answering")
+                }
+                "capture_lost" | "capture_overflow" => {
+                    tracing::info!(
+                        "cursor returned: this computer stopped capturing the mouse and keyboard"
+                    )
+                }
+                "monitors_changed"
+                | "peer_monitors_changed"
+                | "layout_changed"
+                | "settings_changed"
+                | "peer_settings_changed" => {
+                    tracing::info!("cursor returned: screens, layout or settings changed")
+                }
+                "peer_cannot_inject" | "input_admission_failed" | "permission_denied" => {
+                    tracing::info!("cursor returned: the other computer could not take the cursor")
+                }
+                "incoming_enter" => {
+                    tracing::info!("cursor returned: the other computer's mouse took over")
+                }
                 _ => tracing::info!("cursor returned: other reason"),
             }
         }
