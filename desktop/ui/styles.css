@@ -118,7 +118,29 @@ button { cursor: pointer; }
 .seg { display: inline-flex; background: var(--rail); border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 2px; }
 .seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 6px; color: var(--ink-2); font-weight: 500; }
 .seg button[aria-pressed="true"] { background: var(--raise-2); color: var(--ink); }
-input[type="range"] { accent-color: var(--cursor); width: 180px; }
+input[type="range"] {
+  -webkit-appearance: none; appearance: none; width: 180px; height: 18px; background: transparent; margin: 0; cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 99px;
+  background: linear-gradient(to right, var(--focus) var(--fill, 0%), var(--line) var(--fill, 0%));
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
+  background: var(--ink); border: 0; box-shadow: 0 1px 4px rgba(0, 0, 0, .45), 0 0 0 4px rgba(143, 201, 255, .0);
+  transition: box-shadow .15s;
+}
+input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 1px 4px rgba(0, 0, 0, .45), 0 0 0 5px rgba(143, 201, 255, .18); }
+input[type="range"]:focus-visible { outline: none; }
+input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--focus); }
+
+/* Thin scrollbars without arrow buttons, like the rest of the window. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--raise-2); border-radius: 99px; border: 3px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: #3b4460; }
+::-webkit-scrollbar-button { display: none; height: 0; width: 0; }
+::-webkit-scrollbar-corner { background: transparent; }
 kbd {
   font: 500 12px var(--text); background: var(--rail); border: 1px solid var(--line); border-bottom-width: 2px;
   padding: 2px 7px; border-radius: 6px; color: var(--ink);

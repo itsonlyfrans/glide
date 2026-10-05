@@ -5,6 +5,9 @@ import { store } from '../store.js';
 import { switchRow, toast, confirmModal } from '../ui.js';
 import { updates, onUpdateChange, checkNow, installNow } from '../updates.js';
 
+// Paints the filled part of a slider's track up to its thumb.
+const fillRange = (r) => r.style.setProperty('--fill', `${((r.value - r.min) / (r.max - r.min)) * 100}%`);
+
 // The Updates section re-draws itself while a check or download is running.
 let updatesBox = null;
 let shownVersion = '';
@@ -129,6 +132,7 @@ export function mountSettings(root) {
           setting('Edge delay', 'Wait this long at a screen edge before crossing. Stops accidental switches.', (() => {
             const out = h('span', { class: 'desc', style: { width: '54px', textAlign: 'right' } }, `${s.switching.edge_delay_ms} ms`);
             const r = h('input', { type: 'range', min: '0', max: '500', step: '10', value: String(s.switching.edge_delay_ms), 'aria-label': 'Edge delay' });
+            fillRange(r); r.addEventListener('input', () => fillRange(r));
             r.addEventListener('input', () => { out.textContent = `${r.value} ms`; });
             r.addEventListener('change', () => patch({ switching: { edge_delay_ms: +r.value } }));
             return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, r, out);
@@ -137,6 +141,7 @@ export function mountSettings(root) {
             const speed = s.switching.pointer_speed ?? 1;
             const out = h('span', { class: 'desc', style: { width: '54px', textAlign: 'right' } }, `${speed.toFixed(1)}×`);
             const r = h('input', { type: 'range', min: '50', max: '300', step: '10', value: String(Math.round(speed * 100)), 'aria-label': 'Pointer speed on other computers' });
+            fillRange(r); r.addEventListener('input', () => fillRange(r));
             r.addEventListener('input', () => { out.textContent = `${(r.value / 100).toFixed(1)}×`; });
             r.addEventListener('change', () => patch({ switching: { pointer_speed: r.value / 100 } }));
             return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, r, out);
@@ -146,11 +151,12 @@ export function mountSettings(root) {
             const label = (v) => (v <= 0 ? 'Off' : `${v.toFixed(1)}×`);
             const out = h('span', { class: 'desc', style: { width: '54px', textAlign: 'right' } }, label(accel));
             const r = h('input', { type: 'range', min: '0', max: '40', step: '1', value: String(Math.round(accel * 10)), 'aria-label': 'Pointer acceleration' });
+            fillRange(r); r.addEventListener('input', () => fillRange(r));
             r.addEventListener('input', () => { out.textContent = label(r.value / 10); });
             r.addEventListener('change', () => patch({ switching: { pointer_acceleration: r.value / 10 } }));
             return h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, r, out);
           })()) : null,
-          state.self.os === 'macos' ? switchRow({ title: 'Smooth the cursor over Wi-Fi', desc: 'When the cursor arrives from another computer in bursts, spread them over the next frames instead of jumping. Adds at most 8 ms. Turn it off if the cursor feels delayed.', checked: s.switching.smooth_moves !== false, onChange: (v) => patch({ switching: { smooth_moves: v } }) }) : null,
+          state.self.os === 'macos' ? switchRow({ title: 'Smooth the cursor over Wi-Fi', desc: 'Wi-Fi delivers the cursor from another computer in bursts. Glide replays it at the pace it was moved, running only as far behind as your network needs (about nothing on a cable, at most 50 ms). Off limits that to 12 ms, which can stutter on Wi-Fi.', checked: s.switching.smooth_moves !== false, onChange: (v) => patch({ switching: { smooth_moves: v } }) }) : null,
           switchRow({ title: 'Double-tap the edge to cross', desc: 'Cross only when you push against the edge twice.', checked: s.switching.double_tap, onChange: (v) => patch({ switching: { double_tap: v } }) }),
           setting('Return to this computer', 'Works from anywhere, even if a connection drops.', hotkeyButton(s.hotkeys.return_home, (v) => patch({ hotkeys: { return_home: v } }))),
           setting('Turn sharing on or off', null, hotkeyButton(s.hotkeys.toggle_sharing, (v) => patch({ hotkeys: { toggle_sharing: v } }))))),
