@@ -1076,7 +1076,9 @@ fn publish_bundle(
     }
     all_items.extend(file_items.iter().cloned());
     let actual = ClipboardChangeToken(state.pasteboard.changeCount() as u64);
-    if actual != expected {
+    // Only a copy made on this Mac wins over the incoming clipboard. A change Glide made itself (an earlier incoming
+    // clipboard landing while this one was on its way) carries Glide's marker and must not drop this one.
+    if actual != expected && observed_marker(&state.pasteboard).is_none() {
         return Ok(ClipboardPublish::ReplacedLocalChange {
             actual_change_token: actual,
         });

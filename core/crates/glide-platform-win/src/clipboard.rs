@@ -1173,7 +1173,11 @@ fn publish_bundle(
     let _open = open_clipboard(hwnd)?;
     // SAFETY: query has no pointer arguments and runs while clipboard ownership is locked.
     let actual = ClipboardChangeToken(u64::from(unsafe { GetClipboardSequenceNumber() }));
-    if expected != actual {
+    // Only a copy made on this computer wins over the incoming clipboard. A change Glide made itself (an earlier
+    // incoming clipboard landing while this one was on its way) leaves Glide as the owner and must not drop this one.
+    // SAFETY: query has no pointer arguments and runs while the clipboard is open.
+    let glide_owned = unsafe { GetClipboardOwner() } == hwnd;
+    if expected != actual && !glide_owned {
         return Ok(ClipboardPublish::ReplacedLocalChange {
             actual_change_token: actual,
         });
