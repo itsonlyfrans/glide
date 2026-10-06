@@ -147,9 +147,10 @@ pub struct ClipboardSensitivity {
 }
 
 impl ClipboardSensitivity {
-    /// Returns true when any flag requires the content to be treated as sensitive.
+    /// Returns true when any flag requires the content to be treated as sensitive. "Auto-generated" only means an app
+    /// put it there itself (a Copy button) rather than copying a selection; it is not private and is shared.
     pub fn should_exclude(self) -> bool {
-        self.sensitive || self.concealed || self.transient || self.auto_generated
+        self.sensitive || self.concealed || self.transient
     }
 }
 
@@ -336,4 +337,36 @@ pub trait ClipboardBackend: Send + Sync {
 
     /// Cancels every outstanding delayed representation owned by `marker`.
     fn cancel_delayed_render(&self, marker: ClipboardMarker) -> Result<(), BackendError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Bug: text from an app's Copy button never reached the other computer, because apps tag it "auto-generated"
+    // and that tag was treated like a password. Only private content is held back.
+    #[test]
+    fn copy_button_content_is_shared_but_private_content_is_not() {
+        let copy_button = ClipboardSensitivity {
+            auto_generated: true,
+            ..Default::default()
+        };
+        assert!(!copy_button.should_exclude());
+        for private in [
+            ClipboardSensitivity {
+                sensitive: true,
+                ..Default::default()
+            },
+            ClipboardSensitivity {
+                concealed: true,
+                ..Default::default()
+            },
+            ClipboardSensitivity {
+                transient: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(private.should_exclude());
+        }
+    }
 }
