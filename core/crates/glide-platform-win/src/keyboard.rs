@@ -228,16 +228,7 @@ fn hid_from_vk(vk: u32) -> u16 {
     }
 }
 
-/// Windows adds "fake" Shift presses (E0 2A / E0 36) around navigation keys while Num Lock is on; they are not keys
-/// the person pressed and must be neither forwarded nor treated as unknown.
-pub(crate) fn is_fake_shift(data: KBDLLHOOKSTRUCT) -> bool {
-    data.flags & LLKHF_EXTENDED != 0 && matches!(data.scanCode & 0xff, 0x2a | 0x36)
-}
-
 pub(crate) fn translate_key(data: KBDLLHOOKSTRUCT) -> Option<InputEvent> {
-    if is_fake_shift(data) {
-        return None;
-    }
     let hid = if data.vkCode == VK_PAUSE as u32 {
         72
     } else if data.vkCode == VK_SNAPSHOT as u32 {
@@ -406,9 +397,9 @@ mod tests {
     }
 
     // Bug: pressing Shift while controlling the Mac sent the cursor home, because a Shift without a usable scan code
-    // (sent by keyboard software such as Logitech Options+) was unknown and capture gave up.
+    // (sent by keyboard software such as Logitech Options+, or flagged as extended) was unknown and capture gave up.
     #[test]
-    fn keys_without_a_scan_code_are_recognised_and_fake_shifts_ignored() {
+    fn keys_without_a_usable_scan_code_including_extended_shift_are_recognised() {
         for (vk, hid) in [
             (VK_LSHIFT, 225),
             (VK_RSHIFT, 229),
@@ -429,14 +420,23 @@ mod tests {
                 })
             );
         }
-        let fake = KBDLLHOOKSTRUCT {
-            vkCode: VK_LSHIFT as u32,
-            scanCode: 0x2a,
-            flags: LLKHF_EXTENDED,
-            ..Default::default()
-        };
-        assert!(is_fake_shift(fake));
-        assert!(translate_key(fake).is_none());
+        // Bug: some keyboards (or their software) mark Shift as an extended key. Taking those for Windows' own
+        // "fake" Shift presses dropped Shift entirely: no capitals and no Shift+Enter on the other computer.
+        for (vk, scan, hid) in [(VK_LSHIFT, 0x2a, 225), (VK_RSHIFT, 0x36, 229)] {
+            assert_eq!(
+                translate_key(KBDLLHOOKSTRUCT {
+                    vkCode: vk as u32,
+                    scanCode: scan,
+                    flags: LLKHF_EXTENDED,
+                    ..Default::default()
+                })
+                .map(|e| e.kind),
+                Some(InputEventKind::Key {
+                    key: Key(hid),
+                    down: true
+                })
+            );
+        }
         // A real Shift still maps by scan code.
         assert_eq!(
             translate_key(KBDLLHOOKSTRUCT {
