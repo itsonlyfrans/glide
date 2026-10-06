@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/glide-proto", "crates/glide-platform", "crates/glide-platform-win", "crates/glide-platform-mac", "crates/glide-net", "crates/glide-xfer", "crates/glide-daemon"]
 
 [workspace.package]
-version = "0.2.23"
+version = "0.2.24"
 edition = "2021"
 license = "MIT"
 

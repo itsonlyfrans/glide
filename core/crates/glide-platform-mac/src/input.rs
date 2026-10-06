@@ -637,6 +637,9 @@ struct Context {
     cursor: CursorGuard,
     tap: Option<Tap>,
     source: OwnedCf,
+    /// Modifier keys (Shift, Ctrl, Option, Cmd) are posted from the system's HID state, so apps that ask
+    /// macOS "is Shift held right now?" instead of reading the event (Shift+Enter in many chat apps) see it held.
+    modifier_source: OwnedCf,
     mouse_event: OwnedCf,
     displays: [DisplayRect; MAX_DISPLAYS],
     count: usize,
@@ -990,10 +993,17 @@ impl Context {
                 }
                 let repeated = next_keys[index] && down;
                 next_keys[index] = down;
-                // SAFETY: live private source and keycode from the bounded physical table.
+                let modifier = (0xe0..=0xe7).contains(&key) || key == 0x39;
+                // Caps Lock stays on the private source: from the HID state it would also flip the real lock.
+                let key_source = if (0xe0..=0xe7).contains(&key) {
+                    self.modifier_source.raw()
+                } else {
+                    source
+                };
+                // SAFETY: live owned source and keycode from the bounded physical table.
                 let event =
-                    OwnedCf::new(unsafe { CGEventCreateKeyboardEvent(source, code, down) })?;
-                if (0xe0..=0xe7).contains(&key) || key == 0x39 {
+                    OwnedCf::new(unsafe { CGEventCreateKeyboardEvent(key_source, code, down) })?;
+                if modifier {
                     // SAFETY: owned keyboard event; FlagsChanged is the modifier event type.
                     unsafe {
                         CGEventSetType(event.raw(), 12);
@@ -1652,6 +1662,14 @@ fn run(
         CGEventSourceSetUserData(source.raw(), MAGIC);
         CGEventSourceSetLocalEventsSuppressionInterval(source.raw(), 0.0);
     }
+    // SAFETY: HID system state (1); modifiers posted from it update the session's modifier state. Every held
+    // modifier is released through release_all when control leaves, as for the private source.
+    let modifier_source = OwnedCf::new(unsafe { CGEventSourceCreate(1) })?;
+    // SAFETY: live owned source, as above.
+    unsafe {
+        CGEventSourceSetUserData(modifier_source.raw(), MAGIC);
+        CGEventSourceSetLocalEventsSuppressionInterval(modifier_source.raw(), 0.0);
+    }
     // SAFETY: a live private source and a finite initial point; pointer fields are refreshed
     // before every post. The reusable event stays exclusively on this owning thread.
     let mouse_event = OwnedCf::new(unsafe {
@@ -1671,6 +1689,7 @@ fn run(
         cursor: CursorGuard::default(),
         tap: None,
         source,
+        modifier_source,
         mouse_event,
         displays: [DisplayRect::default(); MAX_DISPLAYS],
         count: 0,
