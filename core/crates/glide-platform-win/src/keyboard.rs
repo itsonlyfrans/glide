@@ -190,7 +190,54 @@ pub(crate) fn key_input(key: Key, down: bool) -> Result<INPUT, BackendError> {
     })
 }
 
+/// Keys some software sends without a usable scan code (Logitech Options+, remappers, on-screen keyboards): the
+/// virtual-key code still says which key it is.
+fn hid_from_vk(vk: u32) -> u16 {
+    match vk {
+        0x41..=0x5a => (vk - 0x41 + 4) as u16,
+        0x31..=0x39 => (vk - 0x31 + 30) as u16,
+        0x30 => 39,
+        0x70..=0x7b => (vk - 0x70 + 58) as u16,
+        _ => match vk as u16 {
+            VK_RETURN => 40,
+            VK_ESCAPE => 41,
+            VK_BACK => 42,
+            VK_TAB => 43,
+            VK_SPACE => 44,
+            VK_CAPITAL => 57,
+            VK_INSERT => 73,
+            VK_HOME => 74,
+            VK_PRIOR => 75,
+            VK_DELETE => 76,
+            VK_END => 77,
+            VK_NEXT => 78,
+            VK_RIGHT => 79,
+            VK_LEFT => 80,
+            VK_DOWN => 81,
+            VK_UP => 82,
+            VK_LCONTROL | VK_CONTROL => 224,
+            VK_LSHIFT | VK_SHIFT => 225,
+            VK_LMENU | VK_MENU => 226,
+            VK_LWIN => 227,
+            VK_RCONTROL => 228,
+            VK_RSHIFT => 229,
+            VK_RMENU => 230,
+            VK_RWIN => 231,
+            _ => 0,
+        },
+    }
+}
+
+/// Windows adds "fake" Shift presses (E0 2A / E0 36) around navigation keys while Num Lock is on; they are not keys
+/// the person pressed and must be neither forwarded nor treated as unknown.
+pub(crate) fn is_fake_shift(data: KBDLLHOOKSTRUCT) -> bool {
+    data.flags & LLKHF_EXTENDED != 0 && matches!(data.scanCode & 0xff, 0x2a | 0x36)
+}
+
 pub(crate) fn translate_key(data: KBDLLHOOKSTRUCT) -> Option<InputEvent> {
+    if is_fake_shift(data) {
+        return None;
+    }
     let hid = if data.vkCode == VK_PAUSE as u32 {
         72
     } else if data.vkCode == VK_SNAPSHOT as u32 {
@@ -202,7 +249,10 @@ pub(crate) fn translate_key(data: KBDLLHOOKSTRUCT) -> Option<InputEvent> {
             } else {
                 0
             };
-        REVERSE[code as usize]
+        match REVERSE[code as usize] {
+            0 => hid_from_vk(data.vkCode),
+            hid => hid,
+        }
     };
     (hid != 0).then_some(InputEvent {
         kind: InputEventKind::Key {
@@ -353,5 +403,52 @@ mod tests {
             ..Default::default()
         });
         assert!(unmapped.is_none());
+    }
+
+    // Bug: pressing Shift while controlling the Mac sent the cursor home, because a Shift without a usable scan code
+    // (sent by keyboard software such as Logitech Options+) was unknown and capture gave up.
+    #[test]
+    fn keys_without_a_scan_code_are_recognised_and_fake_shifts_ignored() {
+        for (vk, hid) in [
+            (VK_LSHIFT, 225),
+            (VK_RSHIFT, 229),
+            (VK_SHIFT, 225),
+            (VK_RETURN, 40),
+            (0x41, 4),
+        ] {
+            assert_eq!(
+                translate_key(KBDLLHOOKSTRUCT {
+                    vkCode: vk as u32,
+                    scanCode: 0,
+                    ..Default::default()
+                })
+                .map(|e| e.kind),
+                Some(InputEventKind::Key {
+                    key: Key(hid),
+                    down: true
+                })
+            );
+        }
+        let fake = KBDLLHOOKSTRUCT {
+            vkCode: VK_LSHIFT as u32,
+            scanCode: 0x2a,
+            flags: LLKHF_EXTENDED,
+            ..Default::default()
+        };
+        assert!(is_fake_shift(fake));
+        assert!(translate_key(fake).is_none());
+        // A real Shift still maps by scan code.
+        assert_eq!(
+            translate_key(KBDLLHOOKSTRUCT {
+                vkCode: VK_RSHIFT as u32,
+                scanCode: 0x36,
+                ..Default::default()
+            })
+            .map(|e| e.kind),
+            Some(InputEventKind::Key {
+                key: Key(229),
+                down: true
+            })
+        );
     }
 }

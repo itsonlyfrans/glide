@@ -1169,8 +1169,30 @@ impl Core {
                     ) || (job_transfer.direction == TransferDirection::Send
                         && matches!(&error, glide_xfer::Error::Limit(_)));
                     match &error {
-                        glide_xfer::Error::Limit(_) => {
-                            tracing::info!("clipboard transfer failed: size limit")
+                        // The limit names are fixed strings in glide-xfer; only a category reaches the log.
+                        glide_xfer::Error::Limit(limit) => {
+                            if limit.starts_with("staging") {
+                                tracing::info!(
+                                    "clipboard transfer failed: too many earlier copies kept"
+                                )
+                            } else if limit.contains("path") {
+                                tracing::info!(
+                                    "clipboard transfer failed: path too long or too deep"
+                                )
+                            } else if limit.contains("entry count")
+                                || limit.contains("root")
+                                || limit.contains("manifest count")
+                            {
+                                tracing::info!("clipboard transfer failed: too many files")
+                            } else if limit.contains("file size")
+                                || limit.contains("transfer size")
+                                || limit.contains("total size")
+                                || limit.contains("aggregate size")
+                            {
+                                tracing::info!("clipboard transfer failed: too large")
+                            } else {
+                                tracing::info!("clipboard transfer failed: size limit")
+                            }
                         }
                         glide_xfer::Error::DiskSpace => {
                             tracing::info!("clipboard transfer failed: disk space")
@@ -1203,6 +1225,18 @@ impl Core {
                             ),
                             std::io::ErrorKind::AlreadyExists => {
                                 tracing::info!("clipboard transfer storage failed: already exists")
+                            }
+                            std::io::ErrorKind::InvalidFilename => tracing::info!(
+                                "clipboard transfer storage failed: name not allowed here"
+                            ),
+                            std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded => {
+                                tracing::info!("clipboard transfer storage failed: disk full")
+                            }
+                            std::io::ErrorKind::ResourceBusy | std::io::ErrorKind::Interrupted => {
+                                tracing::info!("clipboard transfer storage failed: file in use")
+                            }
+                            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData => {
+                                tracing::info!("clipboard transfer storage failed: invalid data")
                             }
                             _ => tracing::info!("clipboard transfer storage failed: other"),
                         }

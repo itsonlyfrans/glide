@@ -1163,6 +1163,9 @@ fn capture_thread(
                     &monitors,
                     native::device_scale(&monitors),
                 );
+                // A key Glide cannot name is dropped, not a reason to give up the whole keyboard and send the
+                // cursor home; an unreadable mouse event still is.
+                let is_key = matches!(sample, Sample::Key(_));
                 let event = match sample {
                     Sample::Key(data) => translate_key(data),
                     Sample::Mouse(message, data) => {
@@ -1172,7 +1175,7 @@ fn capture_thread(
                 };
                 if let Some(event) = event {
                     deliver(event, &sink, &context, &mut cursor);
-                } else if swallow.load(Ordering::Acquire) {
+                } else if swallow.load(Ordering::Acquire) && !is_key {
                     context.fail();
                     cursor.restore();
                 }
