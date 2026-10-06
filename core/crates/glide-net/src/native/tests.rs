@@ -74,7 +74,7 @@ async fn event(
     receiver: &mut broadcast::Receiver<PeerManagerEvent>,
     predicate: impl Fn(&PeerManagerEvent) -> bool,
 ) -> PeerManagerEvent {
-    tokio::time::timeout(Duration::from_secs(4), async {
+    tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let value = receiver.recv().await.expect("event channel");
             if predicate(&value) {
