@@ -668,60 +668,9 @@ impl FileEngine {
         let _guard = self.staging_lock.lock().await;
         let staging = self.staging.clone();
         let stale_after = self.config.stale_after;
-        tokio::task::spawn_blocking(move || {
-            filesystem::check_chain(&staging)?;
-            let mut removed = 0;
-            for entry in fs::read_dir(&staging)? {
-                let entry = entry?;
-                let name = entry.file_name();
-                if !name
-                    .to_str()
-                    .is_some_and(|name| valid_session_name(name) || valid_spool_name(name))
-                {
-                    continue;
-                }
-                let metadata = fs::symlink_metadata(entry.path())?;
-                if filesystem::link(&metadata) || !metadata.is_dir() {
-                    return Err(Error::Invalid("staging directory type"));
-                }
-                let timestamp = entry.path().join("lease");
-                let modified = match fs::symlink_metadata(&timestamp) {
-                    Ok(metadata) => metadata.modified()?,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        metadata.modified()?
-                    }
-                    Err(error) => return Err(error.into()),
-                };
-                if SystemTime::now()
-                    .duration_since(modified)
-                    .unwrap_or_default()
-                    < stale_after
-                {
-                    continue;
-                }
-                // A live transfer or clipboard publication holds this exclusive lease.
-                let lease = match filesystem::lease(&timestamp) {
-                    Ok(lease) => lease,
-                    Err(Error::Busy) => continue,
-                    Err(Error::Io(error))
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
-                        ) =>
-                    {
-                        continue
-                    }
-                    Err(error) => return Err(error),
-                };
-                drop(lease);
-                filesystem::check_chain(&entry.path())?;
-                fs::remove_dir_all(entry.path())?;
-                removed += 1;
-            }
-            Ok(removed)
-        })
-        .await
-        .map_err(|_| Error::Worker)?
+        tokio::task::spawn_blocking(move || purge_dir(&staging, stale_after))
+            .await
+            .map_err(|_| Error::Worker)?
     }
 
     pub async fn send<C, W>(
@@ -1110,6 +1059,59 @@ impl FileEngine {
         }
         Ok(())
     }
+}
+
+/// Removes session and spool folders nobody is using and that were last touched `stale_after` ago.
+/// A live transfer or a clipboard publication holds its folder's exclusive lease, so those are never removed.
+pub(crate) fn purge_dir(staging: &std::path::Path, stale_after: Duration) -> Result<usize> {
+    filesystem::check_chain(staging)?;
+    let mut removed = 0;
+    for entry in fs::read_dir(staging)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if !name
+            .to_str()
+            .is_some_and(|name| valid_session_name(name) || valid_spool_name(name))
+        {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if filesystem::link(&metadata) || !metadata.is_dir() {
+            return Err(Error::Invalid("staging directory type"));
+        }
+        let timestamp = entry.path().join("lease");
+        let modified = match fs::symlink_metadata(&timestamp) {
+            Ok(metadata) => metadata.modified()?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => metadata.modified()?,
+            Err(error) => return Err(error.into()),
+        };
+        if SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or_default()
+            < stale_after
+        {
+            continue;
+        }
+        // A live transfer or clipboard publication holds this exclusive lease.
+        let lease = match filesystem::lease(&timestamp) {
+            Ok(lease) => lease,
+            Err(Error::Busy) => continue,
+            Err(Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue
+            }
+            Err(error) => return Err(error),
+        };
+        drop(lease);
+        filesystem::check_chain(&entry.path())?;
+        fs::remove_dir_all(entry.path())?;
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 pub(crate) fn valid_session_name(name: &str) -> bool {

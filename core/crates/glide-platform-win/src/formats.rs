@@ -722,8 +722,84 @@ pub(super) fn png_to_dib(_png: &[u8]) -> Result<Vec<u8>, BackendError> {
     Err(BackendError::Unsupported)
 }
 
+/// Marks a PNG as sRGB when it carries no colour information of its own. Windows images are sRGB, but a PNG with no
+/// tag is shown on a Mac in the screen's own colour space, so the same picture looks different there.
+pub(crate) fn tag_srgb(png: Vec<u8>) -> Vec<u8> {
+    const SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+    if png.len() < 8 || png[..8] != SIGNATURE {
+        return png;
+    }
+    let mut position = 8;
+    let mut after_header = None;
+    while position + 12 <= png.len() {
+        let length = u32::from_be_bytes([
+            png[position],
+            png[position + 1],
+            png[position + 2],
+            png[position + 3],
+        ]) as usize;
+        let kind = &png[position + 4..position + 8];
+        if kind == b"sRGB" || kind == b"iCCP" {
+            return png;
+        }
+        if kind == b"IHDR" {
+            after_header = position.checked_add(12 + length);
+        }
+        if kind == b"IDAT" || kind == b"IEND" {
+            break;
+        }
+        match position.checked_add(12 + length) {
+            Some(next) => position = next,
+            None => return png,
+        }
+    }
+    let Some(at) = after_header.filter(|at| *at <= png.len()) else {
+        return png;
+    };
+    // Length 1, type "sRGB", rendering intent 0 (perceptual), then the CRC of type and data.
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in b"sRGB " {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    let mut chunk = vec![0, 0, 0, 1];
+    chunk.extend_from_slice(b"sRGB ");
+    chunk.extend_from_slice(&(!crc).to_be_bytes());
+    let mut tagged = Vec::with_capacity(png.len() + chunk.len());
+    tagged.extend_from_slice(&png[..at]);
+    tagged.extend_from_slice(&chunk);
+    tagged.extend_from_slice(&png[at..]);
+    tagged
+}
+
 #[cfg(test)]
 mod tests {
+    use super::tag_srgb;
+    // Bug: images copied from Windows looked different on the Mac because the PNG carried no colour tag.
+    #[test]
+    fn untagged_png_gets_one_srgb_chunk_and_tagged_png_is_left_alone() {
+        let mut png = vec![137, 80, 78, 71, 13, 10, 26, 10];
+        png.extend_from_slice(&[0, 0, 0, 13]);
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&[0; 13]);
+        png.extend_from_slice(&[0, 0, 0, 0]);
+        png.extend_from_slice(&[0, 0, 0, 0]);
+        png.extend_from_slice(b"IEND");
+        png.extend_from_slice(&[0xAE, 0x42, 0x60, 0x82]);
+        let tagged = tag_srgb(png.clone());
+        assert_eq!(tagged.len(), png.len() + 13);
+        assert_eq!(&tagged[33..37], &[0, 0, 0, 1]);
+        assert_eq!(&tagged[37..41], b"sRGB");
+        assert_eq!(&tagged[41..42], &[0]);
+        assert_eq!(&tagged[42..46], &[0xAE, 0xCE, 0x1C, 0xE9]);
+        assert_eq!(tag_srgb(tagged.clone()), tagged);
+    }
     use super::{cf_html_decode, cf_html_encode, FRAGMENT_END, FRAGMENT_START};
 
     #[test]

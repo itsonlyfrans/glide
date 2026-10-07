@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use crate::formats::{cf_html_decode, cf_html_encode, dib_to_png, png_to_dib};
+use crate::formats::{cf_html_decode, cf_html_encode, dib_to_png, png_to_dib, tag_srgb};
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use glide_platform::{
     validate_clipboard_bundle, BackendError, ClipboardAdmission, ClipboardBackend,
@@ -953,7 +953,7 @@ fn read_content_open(
             } else {
                 return Ok(None);
             };
-            ClipboardContent::bytes(ClipboardFormat::Png, bytes, sensitivity)?
+            ClipboardContent::bytes(ClipboardFormat::Png, tag_srgb(bytes), sensitivity)?
         }
         ClipboardFormat::Other(name) => {
             let id = register_format(&name)?;

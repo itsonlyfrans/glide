@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 const RECORD_BYTES: u64 = 33;
 
@@ -136,6 +136,27 @@ pub(crate) fn read_spool_reservation(root: &std::path::Path) -> Result<u64> {
     Ok(u64::from_le_bytes(bytes))
 }
 
+/// Every copy attempt leaves a staging folder behind (kept a day so interrupted copies can resume), and the engine
+/// refuses new copies once `max_staging_sessions` folders exist. Before refusing, clear the unused ones that have been
+/// idle for a quarter of an hour; a folder in use by a transfer or the clipboard holds its lease and stays.
+fn make_room(staging: &std::path::Path, config: &Config) -> Result<()> {
+    let mut count = 0usize;
+    for entry in fs::read_dir(staging)? {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| valid_session_name(name) || valid_spool_name(name))
+        {
+            count += 1;
+        }
+    }
+    if count >= config.max_staging_sessions {
+        crate::engine::purge_dir(staging, Duration::from_secs(15 * 60))?;
+    }
+    Ok(())
+}
+
 /// Includes pending approval and interrupted manifest/resume spools in the same
 /// staging quota as private/published jobs. The caller serializes reservations.
 pub(crate) fn check_spool_quota(
@@ -144,6 +165,7 @@ pub(crate) fn check_spool_quota(
     required: u64,
     config: &Config,
 ) -> Result<()> {
+    make_room(parent, config)?;
     let mut count = 0usize;
     let mut bytes = 0u64;
     for entry in fs::read_dir(parent)? {
@@ -233,6 +255,7 @@ impl Session {
             None => storage_bytes(&manifest, &config)?,
         };
         if !exists {
+            make_room(&staging, &config)?;
             let mut count = 0;
             let mut stored = 0u64;
             for entry in fs::read_dir(&staging)? {
@@ -1033,6 +1056,48 @@ mod tests {
             Err(Error::Invalid("completed transfer replay"))
         ));
         assert!(root.join("ready/payload.bin").exists());
+    }
+
+    // Bug: after about 32 copy attempts in a day every new copy failed with "too many earlier copies kept", because
+    // finished or abandoned staging folders were only removed after 24 hours.
+    #[tokio::test]
+    async fn a_full_staging_folder_makes_room_by_clearing_idle_old_sessions() {
+        let data = temporary();
+        let config = Config {
+            max_staging_sessions: 1,
+            ..Config::default()
+        };
+        let engine = FileEngine::new(data.path(), config.clone())
+            .await
+            .expect("engine");
+        let mut first = Session::open(
+            engine.staging.clone(),
+            PEER.into(),
+            manifest(&[], config.chunk_size),
+            config.clone(),
+            &Cancel::new(),
+        )
+        .expect("first");
+        let first_root = first.root.clone();
+        first
+            .lease
+            .as_ref()
+            .expect("lease")
+            .set_modified(SystemTime::UNIX_EPOCH)
+            .expect("age");
+        first.preserve();
+        drop(first);
+        let mut second = manifest(&[], config.chunk_size);
+        second.transfer_id = "other".into();
+        assert!(Session::open(
+            engine.staging.clone(),
+            PEER.into(),
+            second,
+            config,
+            &Cancel::new()
+        )
+        .is_ok());
+        assert!(!first_root.exists());
     }
 
     #[tokio::test]
