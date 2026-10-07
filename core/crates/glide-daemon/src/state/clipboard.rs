@@ -59,6 +59,9 @@ pub(super) struct ClipboardSync {
     pub(super) version: (u64, String, String),
     snapshot_token: Option<ClipboardChangeToken>,
     outgoing: Option<transfer::Outgoing>,
+    /// The announcement a local clipboard change replaced. If the clipboard is reread with the same contents (Explorer
+    /// and clipboard tools rewrite it), it is announced again under the same id instead of restarting the transfer.
+    previous_outgoing: Option<transfer::Outgoing>,
     incoming: Option<Incoming>,
     writing_confirmation: Option<String>,
     last_local: Instant,
@@ -94,6 +97,7 @@ impl ClipboardSync {
             version: (0, String::new(), String::new()),
             snapshot_token: None,
             outgoing: None,
+            previous_outgoing: None,
             incoming: None,
             writing_confirmation: None,
             last_local: Instant::now() - LOCAL_INTERVAL,
@@ -392,6 +396,7 @@ impl Core {
         }
         self.clipboard.incoming = None;
         self.clipboard.outgoing = None;
+        self.clipboard.previous_outgoing = None;
     }
 
     /// A transport connection is a reason to reread and reannounce the current local clipboard.
@@ -539,7 +544,7 @@ impl Core {
                 for send in self.clipboard.send.drain(..) {
                     send.abort();
                 }
-                self.clipboard.outgoing = None;
+                self.clipboard.previous_outgoing = self.clipboard.outgoing.take();
                 self.clipboard.received_leases.clear();
                 self.clipboard.active_file_marker = None;
             }
@@ -729,6 +734,8 @@ impl Core {
                 let transfer = self.clipboard.incoming.as_mut().map(|incoming| {
                     let id = transfer::transfer_id(&incoming.peer, &incoming.announcement.clip_id);
                     incoming.confirmation = Some(id.clone());
+                    // The two minutes to answer start now, not when the copy was announced.
+                    incoming.started = Instant::now();
                     Transfer {
                         id,
                         direction: TransferDirection::Receive,
@@ -1089,6 +1096,7 @@ impl Core {
                         incoming.native_manifest = Some(manifest);
                         incoming.native_consent = None;
                         incoming.confirmation = Some(id);
+                        incoming.started = Instant::now();
                         incoming.native_fetch_requested = false;
                         incoming.native_fetch_at = None;
                     }
@@ -1125,6 +1133,15 @@ impl Core {
                 job_transfer.state = TransferState::Active;
                 job_transfer.error = None;
                 let _ = self.update_transfer(job_transfer);
+                // A big file takes a while to arrive and pasting before then pastes the old clipboard: say when it's here.
+                if bytes > EAGER_BYTES as u64 {
+                    self.events.push(Event::Notification(Notification {
+                        level: "info".into(),
+                        title: "Copied file arrived".into(),
+                        body: "It's on the clipboard now, ready to paste.".into(),
+                        action: None,
+                    }));
+                }
             }
             Err(error) => {
                 if self.state.transfers.iter().any(|item| {
@@ -1646,6 +1663,16 @@ impl Core {
             return;
         }
         let native_required = has_files || total_bytes as usize > EAGER_BYTES;
+        // Only right after our own clipboard change (version carries no clip id yet); never over a received clip.
+        let previous = self.clipboard.previous_outgoing.take().filter(|_| {
+            self.clipboard.outgoing.is_none()
+                && self.clipboard.version.2.is_empty()
+                && self.clipboard.version.1 == self.state.self_info.device_id
+        });
+        let revived = previous.is_some();
+        if revived {
+            self.clipboard.outgoing = previous;
+        }
         let reusable = self.clipboard.outgoing.as_ref().filter(|outgoing| {
             outgoing.snapshot.contents == snapshot.contents
                 && outgoing.snapshot.sensitivity == snapshot.sensitivity
@@ -1691,6 +1718,15 @@ impl Core {
                 eager,
                 native_required,
             });
+        } else if let Some(outgoing) = self.clipboard.outgoing.as_ref().filter(|_| revived) {
+            // Same contents as before the clipboard was rewritten: keep its id so a receiver that is still
+            // fetching it carries on instead of starting a large file over from zero.
+            let announcement = &outgoing.announcement;
+            self.clipboard.version = (
+                announcement.timestamp_ms,
+                announcement.origin.clone(),
+                announcement.clip_id.clone(),
+            );
         }
         if let Some(outgoing) = self.clipboard.outgoing.clone() {
             let peers = self
