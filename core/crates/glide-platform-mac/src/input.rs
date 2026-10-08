@@ -1314,7 +1314,9 @@ fn capture_event(context: &mut Context, kind: u32, event: Handle) -> Handle {
             let _ = context.status.try_send(CaptureStatus::SecureInput(secure));
         }
     }
-    if context.secure.load(Ordering::Acquire) {
+    // While this Mac sends input it can no longer see its own keyboard, so control comes home. While it only
+    // receives, keep watching its mouse so moving it still takes control back.
+    if context.secure.load(Ordering::Acquire) && !matches!(context.mode, CaptureMode::Local) {
         context.fallback(CaptureFallback::SecureInput);
         return event;
     }
@@ -1575,7 +1577,11 @@ fn safety_tick(context: &mut Context) {
     let grant = permissions();
     context.post_granted = grant.injection == PermissionStatus::Granted;
     if secure {
-        context.fallback(CaptureFallback::SecureInput);
+        // Same rule as the tap: only a Mac that is sending gives control back. Falling back in Local mode would also
+        // restore a cursor the daemon hid on purpose.
+        if !matches!(context.mode, CaptureMode::Local) {
+            context.fallback(CaptureFallback::SecureInput);
+        }
     } else {
         if grant.input_monitoring != PermissionStatus::Granted
             || grant.accessibility != PermissionStatus::Granted

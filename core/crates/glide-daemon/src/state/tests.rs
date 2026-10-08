@@ -1534,11 +1534,27 @@ async fn mouse_tokens_reject_replaced_connections_until_new_enter() {
     );
 }
 
+// Bug: a password field on the Mac (Secure Input) sent the cursor back to Windows mid-typing.
+#[tokio::test]
+async fn secure_input_on_the_receiving_computer_keeps_control_there() {
+    use glide_platform::CaptureStatus;
+    let dir = tempfile::tempdir().expect("directory");
+    let mut core = paired_core(dir.path()).await;
+    core.receiving_from = Some("e".repeat(64));
+    core.last_receive = Instant::now();
+    core.mock_platform()
+        .expect("mock platform")
+        .input
+        .script_capture_status(CaptureStatus::SecureInput(true))
+        .expect("status");
+    core.tick().await.expect("tick");
+    assert_eq!(core.receiving_from, Some("e".repeat(64)));
+}
+
 #[tokio::test]
 async fn capture_status_loss_releases_input_and_recovery_never_resumes() {
     use glide_platform::CaptureStatus;
     for status in [
-        CaptureStatus::SecureInput(true),
         CaptureStatus::PermissionLost,
         CaptureStatus::TapDisabled,
         CaptureStatus::UnsupportedInput,

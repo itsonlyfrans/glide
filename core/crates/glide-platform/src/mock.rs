@@ -163,7 +163,10 @@ impl MockInput {
         if let CaptureStatus::SecureInput(enabled) = status {
             state.secure_input = Some(enabled);
         }
-        if status != CaptureStatus::SecureInput(false) {
+        // Like the Mac backend: Secure Input only takes control back from a computer that is sending (not Local).
+        let receiving_secure =
+            status == CaptureStatus::SecureInput(true) && state.mode == CaptureMode::Local;
+        if status != CaptureStatus::SecureInput(false) && !receiving_secure {
             state.mode = CaptureMode::Local;
             if let Some(sink) = &state.capture_sink {
                 sink.mark_overflow();

@@ -99,8 +99,20 @@ mod status_tests {
             while statuses.try_recv().is_ok() {}
             backend.script_capture_status(status).expect("status");
             assert_eq!(statuses.try_recv().expect("notification"), status);
-            assert!(sink.take_overflow());
+            // Secure Input only takes control back from a computer that is sending, not one in Local mode.
+            assert_eq!(
+                sink.take_overflow(),
+                status != CaptureStatus::SecureInput(true)
+            );
         }
+        backend
+            .set_mode(CaptureMode::Swallow { lock_pos: true })
+            .expect("mode");
+        backend
+            .script_capture_status(CaptureStatus::SecureInput(true))
+            .expect("status");
+        assert!(sink.take_overflow());
+        assert_eq!(backend.mode().expect("mode"), CaptureMode::Local);
     }
 }
 
