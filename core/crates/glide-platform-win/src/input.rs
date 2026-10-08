@@ -232,6 +232,22 @@ fn unsupported_physical_raw(input: &RAWINPUT) -> bool {
     mouse.ulExtraInformation != MAGIC as u32 && mouse.usFlags & MOUSE_MOVE_ABSOLUTE != 0
 }
 
+/// Installs Glide's low-level keyboard and mouse hooks on the calling thread.
+fn install_hooks(instance: HINSTANCE) -> Result<(Hook, Hook), BackendError> {
+    // SAFETY: Static extern callbacks, module handle, and process-wide low-level hooks.
+    let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), instance, 0) };
+    if keyboard.is_null() {
+        return Err(BackendError::PermissionDenied);
+    }
+    let keyboard = Hook(keyboard);
+    // SAFETY: As above for the mouse callback.
+    let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), instance, 0) };
+    if mouse.is_null() {
+        return Err(BackendError::PermissionDenied);
+    }
+    Ok((keyboard, Hook(mouse)))
+}
+
 struct Hook(HHOOK);
 impl Drop for Hook {
     fn drop(&mut self) {
@@ -1021,18 +1037,7 @@ fn capture_thread(
         instance,
         raw: false,
     };
-    // SAFETY: Static extern callbacks, module handle, and process-wide low-level hooks.
-    let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), instance, 0) };
-    if keyboard.is_null() {
-        return Err(BackendError::PermissionDenied);
-    }
-    let _keyboard = Hook(keyboard);
-    // SAFETY: As above for the mouse callback.
-    let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), instance, 0) };
-    if mouse.is_null() {
-        return Err(BackendError::PermissionDenied);
-    }
-    let _mouse = Hook(mouse);
+    let mut _hooks = install_hooks(instance)?;
     let mut cursor = CursorGuard::new();
     let mut sink: Option<InputSink> = None;
     let mut monitors = monitors;
@@ -1127,6 +1132,15 @@ fn capture_thread(
                                 Ok(())
                             };
                             if result.is_ok() {
+                                // Windows calls the newest low-level hook first. An app that hooked the keyboard
+                                // after Glide (RustDesk while its window has focus) would swallow keys meant for the
+                                // other computer, so put Glide back in front whenever control leaves. The old hooks
+                                // are removed only after the new ones exist, and no hook runs during this handler.
+                                if mode != CaptureMode::Local && !swallow.load(Ordering::Acquire) {
+                                    if let Ok(fresh) = install_hooks(instance) {
+                                        _hooks = fresh;
+                                    }
+                                }
                                 timer.disarm();
                                 delta = [0; 2];
                                 swallow.store(mode != CaptureMode::Local, Ordering::Release);
