@@ -1,7 +1,7 @@
 {
   "name": "glide-desktop",
   "private": true,
-  "version": "0.2.30",
+  "version": "0.2.31",
   "description": "Glide desktop app (Tauri). The screens live in ui/; the engine is ../core.",
   "scripts": {
     "stage": "node scripts/stage-engine.js",

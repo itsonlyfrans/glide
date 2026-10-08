@@ -500,13 +500,29 @@ impl Core {
         if self.capture_pending || super::permissions::missing(self.state.permissions) {
             return Ok(());
         }
-        if self.cursor_hidden_peer.is_some() && self.engine.forwarding_to().is_none() {
-            self.end_forwarding("local_input").await?;
-        }
-        if self.receiving_from.is_some()
-            || self.engine.brain_device() != self.state.self_info.device_id
+        let receiving = self.receiving_from.is_some()
+            || self.engine.brain_device() != self.state.self_info.device_id;
+        // The system itself posts pointer events that move nothing (for example while an app switcher opens during a
+        // drag). Real hand movement always has a delta, so these never take control back from the other computer.
+        if receiving
+            && matches!(
+                event.kind,
+                InputEventKind::PointerMoved { delta_x, delta_y, .. } if delta_x == 0.0 && delta_y == 0.0
+            )
         {
-            self.end_forwarding("local_input").await?;
+            return Ok(());
+        }
+        let reason = match event.kind {
+            InputEventKind::Key { .. } => "local_key",
+            InputEventKind::PointerMoved { .. } => "local_mouse",
+            InputEventKind::Button { .. } => "local_button",
+            InputEventKind::Wheel { .. } => "local_scroll",
+        };
+        if self.cursor_hidden_peer.is_some() && self.engine.forwarding_to().is_none() {
+            self.end_forwarding(reason).await?;
+        }
+        if receiving {
+            self.end_forwarding(reason).await?;
         }
         match event.kind {
             InputEventKind::PointerMoved {
@@ -795,6 +811,18 @@ impl Core {
                 "local_input" => tracing::info!(
                     "cursor returned: this computer's own keyboard or mouse was used"
                 ),
+                "local_key" => {
+                    tracing::info!("cursor returned: this computer's own keyboard was used")
+                }
+                "local_mouse" => tracing::info!("cursor returned: this computer's own mouse moved"),
+                "local_button" => {
+                    tracing::info!(
+                        "cursor returned: a button on this computer's own mouse was used"
+                    )
+                }
+                "local_scroll" => {
+                    tracing::info!("cursor returned: this computer's own scroll wheel was used")
+                }
                 "return_home_hotkey" => tracing::info!("cursor returned: return-home hotkey"),
                 "link_lost" | "peer_unavailable" | "transport_changed" => {
                     tracing::info!("cursor returned: connection to the other computer was lost")

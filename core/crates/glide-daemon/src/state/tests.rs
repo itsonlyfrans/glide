@@ -1534,6 +1534,29 @@ async fn mouse_tokens_reject_replaced_connections_until_new_enter() {
     );
 }
 
+// Bug: dragging a file on the Mac and pressing Alt+Tab took the cursor away, because the system's own pointer events
+// (which move nothing) were taken for the Mac's mouse being used.
+#[tokio::test]
+async fn a_pointer_event_with_no_movement_does_not_take_control_back() {
+    use glide_platform::Point;
+    let dir = tempfile::tempdir().expect("directory");
+    let mut core = paired_core(dir.path()).await;
+    let source = "e".repeat(64);
+    core.receiving_from = Some(source.clone());
+    let moved = |delta_x: f64| InputEvent {
+        kind: InputEventKind::PointerMoved {
+            position: Point { x: 10.0, y: 10.0 },
+            delta_x,
+            delta_y: 0.0,
+        },
+        injected: false,
+    };
+    core.capture_input(moved(0.0)).await.expect("idle event");
+    assert_eq!(core.receiving_from, Some(source));
+    core.capture_input(moved(3.0)).await.expect("real movement");
+    assert_eq!(core.receiving_from, None);
+}
+
 // Bug: a password field on the Mac (Secure Input) sent the cursor back to Windows mid-typing.
 #[tokio::test]
 async fn secure_input_on_the_receiving_computer_keeps_control_there() {
