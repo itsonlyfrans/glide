@@ -1348,6 +1348,12 @@ fn capture_event(context: &mut Context, kind: u32, event: Handle) -> Handle {
                 context.fallback(CaptureFallback::UnsupportedEvent);
                 return event;
             }
+            // macOS re-posts the pointer without motion when the frontmost app changes, e.g. Cmd-Tab mid-drag.
+            // Those carry no source process either, but a hand on this Mac always moves it, so a motionless
+            // event is never taken as this Mac's own mouse taking control back.
+            if delta_x == 0.0 && delta_y == 0.0 {
+                injected = true;
+            }
             if !injected {
                 context.mouse = p;
                 context.mouse_valid = true;
