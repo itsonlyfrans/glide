@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "glide-daemon"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "anyhow",
  "clap",
@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "glide-net"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "glide-platform"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "crossbeam-channel",
  "serde",
@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "glide-platform-mac"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "core-foundation",
  "core-graphics",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "glide-platform-win"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "crossbeam-channel",
  "glide-platform",
@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "glide-proto"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "glide-platform",
  "postcard",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "glide-xfer"
-version = "0.2.28"
+version = "0.2.29"
 dependencies = [
  "anyhow",
  "blake3",
