@@ -938,16 +938,9 @@ impl Context {
         if !granted(self) {
             return Err(BackendError::PermissionDenied);
         }
-        // Secure Input blocks safe local takeover. Stop new remote input, but still permit
-        // the release guard to clear already-held keys/buttons while posting remains granted.
-        let secure = if is_move {
-            self.secure.load(Ordering::Acquire)
-        } else {
-            secure_input()
-        };
-        if secure && !is_release(kind) {
-            return Err(BackendError::Unavailable);
-        }
+        // Secure Input (a password field has focus) hides this computer's own keystrokes from Glide, but posting keys
+        // and moving the mouse into it still works. Remote typing and pasting into password fields is allowed on
+        // purpose; local mouse movement still takes control back, and the return hotkey works from the other computer.
         if matches!(kind, InputEventKind::PointerMoved { .. }) && self.dirty.load(Ordering::Acquire)
         {
             self.fallback(CaptureFallback::TopologyChanged);

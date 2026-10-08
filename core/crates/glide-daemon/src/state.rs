@@ -1089,9 +1089,19 @@ impl Core {
             if status == glide_platform::CaptureStatus::SecureInput(false) && self.capture_pending {
                 self.next_permission_check = Instant::now();
             }
-            capture_lost |= status != glide_platform::CaptureStatus::SecureInput(false);
+            // Secure Input (a password field has focus) only stops this computer from reading its own keyboard. That
+            // matters when it is the one capturing and forwarding; while it merely receives, the other computer can
+            // keep typing and pasting into the password field.
+            let forwarding = self.engine.forwarding_to().is_some();
+            capture_lost |= match status {
+                glide_platform::CaptureStatus::SecureInput(secure) => secure && forwarding,
+                _ => true,
+            };
         }
-        if capture_lost || self.platform.input_backend().secure_input_enabled() == Some(true) {
+        if capture_lost
+            || (self.engine.forwarding_to().is_some()
+                && self.platform.input_backend().secure_input_enabled() == Some(true))
+        {
             self.end_forwarding("capture_lost")
                 .await
                 .map_err(|error| anyhow::anyhow!(error.message))?;
