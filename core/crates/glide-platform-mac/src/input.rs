@@ -1577,7 +1577,11 @@ fn safety_tick(context: &mut Context) {
     let grant = permissions();
     context.post_granted = grant.injection == PermissionStatus::Granted;
     if secure {
-        context.fallback(CaptureFallback::SecureInput);
+        // Same rule as the tap: only a Mac that is sending gives control back. Falling back in Local mode would also
+        // restore a cursor the daemon hid on purpose.
+        if !matches!(context.mode, CaptureMode::Local) {
+            context.fallback(CaptureFallback::SecureInput);
+        }
     } else {
         if grant.input_monitoring != PermissionStatus::Granted
             || grant.accessibility != PermissionStatus::Granted
