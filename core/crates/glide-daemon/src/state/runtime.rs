@@ -512,6 +512,11 @@ impl Core {
         {
             return Ok(());
         }
+        // Typing on this computer's own keyboard types here. It must not hand the other computer's mouse back, or
+        // pressing an arrow key while that mouse points at this screen would move the cursor away.
+        if receiving && matches!(event.kind, InputEventKind::Key { .. }) {
+            return Ok(());
+        }
         let reason = match event.kind {
             InputEventKind::Key { .. } => "local_key",
             InputEventKind::PointerMoved { .. } => "local_mouse",

@@ -1534,6 +1534,28 @@ async fn mouse_tokens_reject_replaced_connections_until_new_enter() {
     );
 }
 
+// Bug: pressing an arrow key on the Mac's own keyboard while the Windows mouse pointed at the Mac handed the mouse back
+// and moved the cursor away.
+#[tokio::test]
+async fn typing_on_the_receiving_computer_does_not_hand_the_mouse_back() {
+    let dir = tempfile::tempdir().expect("directory");
+    let mut core = paired_core(dir.path()).await;
+    let source = "e".repeat(64);
+    core.receiving_from = Some(source.clone());
+    for down in [true, false] {
+        core.capture_input(InputEvent {
+            kind: InputEventKind::Key {
+                key: Key(0x4f),
+                down,
+            },
+            injected: false,
+        })
+        .await
+        .expect("key");
+    }
+    assert_eq!(core.receiving_from, Some(source));
+}
+
 // Bug: dragging a file on the Mac and pressing Alt+Tab took the cursor away, because the system's own pointer events
 // (which move nothing) were taken for the Mac's mouse being used.
 #[tokio::test]
