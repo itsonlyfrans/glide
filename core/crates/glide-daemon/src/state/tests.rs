@@ -1557,6 +1557,40 @@ async fn a_pointer_event_with_no_movement_does_not_take_control_back() {
     assert_eq!(core.receiving_from, None);
 }
 
+// Bug: pressing an arrow key on the Mac's own keyboard while the Windows mouse was on the Mac sent the cursor home,
+// and the next mouse move re-entered at the Mac's screen edge.
+#[tokio::test]
+async fn typing_on_the_receiving_computer_keeps_the_other_mouse_there() {
+    use glide_platform::Point;
+    let dir = tempfile::tempdir().expect("directory");
+    let mut core = paired_core(dir.path()).await;
+    let source = "e".repeat(64);
+    core.receiving_from = Some(source.clone());
+    for down in [true, false] {
+        core.capture_input(InputEvent {
+            kind: InputEventKind::Key {
+                key: Key(0x4f),
+                down,
+            },
+            injected: false,
+        })
+        .await
+        .expect("local arrow key");
+    }
+    assert_eq!(core.receiving_from, Some(source));
+    core.capture_input(InputEvent {
+        kind: InputEventKind::PointerMoved {
+            position: Point { x: 10.0, y: 10.0 },
+            delta_x: 3.0,
+            delta_y: 0.0,
+        },
+        injected: false,
+    })
+    .await
+    .expect("local mouse");
+    assert_eq!(core.receiving_from, None);
+}
+
 // Bug: a password field on the Mac (Secure Input) sent the cursor back to Windows mid-typing.
 #[tokio::test]
 async fn secure_input_on_the_receiving_computer_keeps_control_there() {

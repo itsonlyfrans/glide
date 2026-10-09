@@ -512,6 +512,12 @@ impl Core {
         {
             return Ok(());
         }
+        // Typing on this computer's own keyboard while the other computer's mouse is here is using both together, not
+        // asking for control back: the keys already reach this computer's apps. Ending control here sent the cursor
+        // home, and the next mouse move re-entered at the screen edge. The return-home hotkey above still works.
+        if receiving && matches!(event.kind, InputEventKind::Key { .. }) {
+            return Ok(());
+        }
         let reason = match event.kind {
             InputEventKind::Key { .. } => "local_key",
             InputEventKind::PointerMoved { .. } => "local_mouse",
